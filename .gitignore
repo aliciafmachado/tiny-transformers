@@ -1,3 +1,4 @@
 local-data/
 yarn.lock
 node_modules
+pretrained_js_models/

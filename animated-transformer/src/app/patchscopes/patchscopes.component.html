@@ -1,0 +1,47 @@
+
+<style>
+    :host {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+      font-size: 14px;
+      color: #333;
+      box-sizing: border-box;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      display: flex;
+      margin: 0px;
+      padding: 0px;
+  
+      flex-wrap: nowrap;
+      flex-direction: column;
+      justify-content: flex-start;
+      align-items: stretch;
+    }
+</style>
+
+<p> patchscopes works ! </p>
+
+
+  <!-- Toolbar -->
+<div class="toolbar" role="banner">
+  <a class="small-logo" aria-label="Home" [routerLink]="['/']" title="Home">
+    <img src="/assets/pair-logo.svg">
+  </a> <span class="title">Patchscopes: A Unifying Framework for Inspecting Hidden Representations of Language Models</span>
+    <div class="spacer"></div>
+</div>
+  
+  <div class="content" role="main">
+  
+    <mat-card class="card">
+      <mat-card-content>
+        <mat-form-field>
+          <input matInput 
+                 placeholder="Enter path to model" 
+                 [(ngModel)]="path_to_model" 
+                 (ngModelChange)="updatePathToModel($event)">
+        </mat-form-field>
+      </mat-card-content>
+    </mat-card>
+  
+  </div>
+  
+  

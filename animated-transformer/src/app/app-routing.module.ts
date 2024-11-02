@@ -21,6 +21,7 @@ import { SAEComponent } from 'src/app/sae/sae.component';
 import { LandingPageComponent } from 'src/app/landing-page/landing-page.component';
 import { ErrorPageComponent } from './error-page/error-page.component';
 import { WebColabComponent } from 'src/app/web-colab/web-colab.component';
+import { PatchscopesComponent } from './patchscopes/patchscopes.component';
 
 const routes: Routes = [
   { path: '', component: LandingPageComponent, pathMatch: 'full' },
@@ -28,6 +29,7 @@ const routes: Routes = [
   { path: 'transformers', component: AnimatedTransformerComponent },
   { path: 'wcolab', component: WebColabComponent },
   { path: 'sae', component: SAEComponent },
+  { path: 'patchscopes', component: PatchscopesComponent },
   { path: '**', component: ErrorPageComponent, pathMatch: 'full' },
 ];
 

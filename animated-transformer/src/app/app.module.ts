@@ -33,6 +33,7 @@ import { AnimatedTransformerModule } from './animated-transformer/animated-trans
 import { LandingPageComponent } from './landing-page/landing-page.component';
 import { ErrorPageComponent } from './error-page/error-page.component';
 import { D3LineChartModule } from './d3-line-chart/d3-line-chart.module';
+import { PatchscopesModule } from './patchscopes/patchscopes.module';
 
 @NgModule({
   declarations: [
@@ -56,6 +57,7 @@ import { D3LineChartModule } from './d3-line-chart/d3-line-chart.module';
     ActivationVisModule,
     AnimatedTransformerModule,
     D3LineChartModule,
+    PatchscopesModule,
   ],
   providers: [],
   bootstrap: [AppComponent],
