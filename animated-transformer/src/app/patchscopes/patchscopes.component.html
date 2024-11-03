@@ -18,9 +18,6 @@
     }
 </style>
 
-<p> patchscopes works ! </p>
-
-
   <!-- Toolbar -->
 <div class="toolbar" role="banner">
   <a class="small-logo" aria-label="Home" [routerLink]="['/']" title="Home">
@@ -30,18 +27,17 @@
 </div>
   
   <div class="content" role="main">
-  
     <mat-card class="card">
       <mat-card-content>
-        <mat-form-field>
-          <input matInput 
-                 placeholder="Enter path to model" 
-                 [(ngModel)]="path_to_model" 
-                 (ngModelChange)="updatePathToModel($event)">
-        </mat-form-field>
+          <app-load-model></app-load-model>
       </mat-card-content>
     </mat-card>
-  
+
+    <mat-card class="card">
+      <mat-card-content>
+          <app-evaluate></app-evaluate>
+      </mat-card-content>
+    </mat-card>
   </div>
   
   

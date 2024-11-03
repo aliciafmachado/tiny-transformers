@@ -1,3 +1,4 @@
+// TODO(@aliciafmachado): cleanup unused dependencies.
 import { NgModule } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { PatchscopesComponent } from './patchscopes.component';
@@ -26,10 +27,14 @@ import { AutoCompletedTextInputComponent } from '../auto-completed-text-input/au
 
 import { JsonStrListValidatorDirective } from '../form-validators/json-str-list-validator.directive';
 import { TokenSeqDisplayComponent } from '../token-seq-display/token-seq-display.component';
+import { LoadModelComponent } from './load-model/load-model.component';
+import { EvaluateComponent } from './evaluate/evaluate.component';
 
 @NgModule({
     declarations: [
       PatchscopesComponent,
+      LoadModelComponent,
+      EvaluateComponent,
     ],
     imports: [
         CommonModule,

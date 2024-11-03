@@ -1,0 +1,72 @@
+<div>Load a model:</div>
+
+<section>
+  <form>
+    <input type="text" placeholder="Path to model" #path>
+    <button class="primary" type="button" (click)="updatePathToModel(path.value)">Open</button>
+  </form>
+</section>
+
+<div *ngIf="path_to_model()">Opening model at {{path_to_model()}}</div>
+
+<!-- <button class="primary" type="button" (click)="loadModelAndPrintWeights()">Load model</button> -->
+
+<!-- <div *ngIf="model">Model loaded</div> -->
+
+<!-- <form class="input-form">
+  <mat-form-field class="short-width" appearance="fill">
+    <mat-label>Input</mat-label>
+    <input matInput jsonStrListValidator
+      maxlength="30" [formControl]="inputControl">
+    <mat-error class="error"
+      *ngIf="
+      inputControl.invalid
+      && (inputControl.dirty || inputControl.touched)
+      && inputControl.errors?.['data']">
+        {{inputControl.errors?.['data'].message}}
+    </mat-error>
+  </mat-form-field>
+</form> -->
+
+<!-- <form class="input-form">
+  <mat-form-field class="short-width" appearance="fill">
+    <mat-label>Input</mat-label>
+    <input matInput jsonStrListValidator
+      maxlength="30" [formControl]="inputControl">
+    <mat-error class="error"
+      *ngIf="
+      inputControl.invalid
+      && (inputControl.dirty || inputControl.touched)
+      && inputControl.errors?.['data']">
+        {{inputControl.errors?.['data'].message}}
+    </mat-error> -->
+  <!-- </mat-form-field> -->
+<!-- </form> -->
+
+<!-- <mat-card class="card">
+  <mat-card-content>
+    <mat-form-field>
+      <input matInput 
+             placeholder="Enter path to model" 
+             [(ngModel)]="path_to_model" 
+             (ngModelChange)="updatePathToModel($event)">
+    </mat-form-field>
+  </mat-card-content>
+</mat-card> -->
+
+<!-- <form class="input-form"></form>
+  <mat-form-field class="short-width" appearance="fill">
+    <mat-label>Input</mat-label>
+    <input matInput jsonStrListValidator
+      maxlength="30" [formControl]="inputControl">
+    <mat-error class="error"
+      *ngIf="
+      inputControl.invalid
+      && (inputControl.dirty || inputControl.touched)
+      && inputControl.errors?.['data']">
+        {{inputControl.errors?.['data'].message}}
+    </mat-error>
+  </mat-form-field>
+</form> -->
+  
+  
