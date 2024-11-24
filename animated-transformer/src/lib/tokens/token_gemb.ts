@@ -179,6 +179,20 @@ export function prepareBasicTaskTokenRep(baseVocab: string[]): BasicTaskTokenRep
   };
 }
 
+// export function loadTaskTokenRep(tokenToIdx: { [token: string]: number }, eosToken: string,
+//   padToken?: string, maskToken?: string
+// ): BasicTaskTokenRep {
+
+//   return {
+//     maskToken,
+//     padToken,
+//     eosToken,
+//     tokens: tokenToIdx,
+//     tokenToIdx,
+//   }
+
+// }
+
 // ----------------------------------------------------------------------------
 // ----------------------------------------------------------------------------
 
