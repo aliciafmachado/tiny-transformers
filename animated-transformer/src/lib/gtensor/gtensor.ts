@@ -100,12 +100,12 @@ type DotCompatibleDimension<
 > = D2 extends never
   ? ErrorMustPassDimension
   : D1 extends D2
-    ? D2 extends D1
-      ? Exclude<M1 & M2, D1 & D2> extends never
-        ? Dimension<M2, D2>
-        : ErrorNotAllowedName<Exclude<M1 & M2, D2>>
-      : ErrorDimensionNamesMustBeEqual<D2, D1>
-    : ErrorDimensionNamesMustBeEqual<D1, D2>;
+  ? D2 extends D1
+  ? Exclude<M1 & M2, D1 & D2> extends never
+  ? Dimension<M2, D2>
+  : ErrorNotAllowedName<Exclude<M1 & M2, D2>>
+  : ErrorDimensionNamesMustBeEqual<D2, D1>
+  : ErrorDimensionNamesMustBeEqual<D1, D2>;
 
 type DisjointDimensions<G2 extends DName, G extends DName> = G2 & G extends never
   ? G2
@@ -123,8 +123,8 @@ interface ErrorLiftDimInOutput<D> {
 type DimensionFnToLift<D extends DName, G extends DName, G2 extends DName> = D extends G
   ? ErrorLiftDimInInput<D>
   : D extends G2
-    ? ErrorLiftDimInOutput<D>
-    : D;
+  ? ErrorLiftDimInOutput<D>
+  : D;
 
 export function liftGTensorFnOverDim<D extends string, G extends string, G2 extends string>(
   liftDim: DimensionFnToLift<D, G, G2>,
@@ -258,7 +258,7 @@ export type Dims<G extends string> = {
   [key in G]: Dimension<G, key>;
 };
 
-export class ValueError extends Error {}
+export class ValueError extends Error { }
 
 // export function gtensorOfDims<G extends DName>(dims: Dims<G>): GTensor<G> {
 //   return dims._gtensor;
@@ -417,7 +417,7 @@ export class GTensor<G extends DName> {
       } else if (g1d.size !== g2d.size) {
         throw new ValueError(
           `Mismatch on common dimension name ${String(g2d.name)}.` +
-            `sizes: ${g2d.size} vs ${g1d.size}`,
+          `sizes: ${g2d.size} vs ${g1d.size}`,
         );
       } else {
         dimsToIgnore.push(g2d);
@@ -777,7 +777,7 @@ export class GTensor<G extends DName> {
       if (g2.dim[d].size !== this.dim[d].size) {
         throw new Error(
           `contract dim name sizes must match for '${d}', ` +
-            `but they were: ${this.dim[d].size} and ${g2.dim[d].size}`,
+          `but they were: ${this.dim[d].size} and ${g2.dim[d].size}`,
         );
       }
     }
@@ -799,28 +799,13 @@ export class GTensor<G extends DName> {
     return new GTensor<G>(this.tensor.equal(g2.tensor), this.dimNames);
   }
 
-  // TODO: support batched gather.
   public gather<D extends G, G2 extends DName>(
     indexes: GTensor<G2>,
     dim: D,
-    // batchDimName?: G & G2,
   ): GTensor<Exclude<G, D> | G2> {
-    // // batchDims.map(d => this.dim[d].index)
-
-    // const commonDims = indexes.dimNames.filter(
-    //   n => this.dimNames.includes(n as never as G));
-
-    // const batchPreparedIndexes = (commonDims.length === 1) ? indexes :
-    //   indexes.mergeDims(commonDims, '_mergedBatchDimName' as never);
-    // let batchDimName = '_mergedBatchDimName';
-    // if (commonDims.length !== 1) {
-    //   batchDimName = commonDims[0];
-    // }
-
     const replacedIndex = this.dim[dim].index;
     const newDimNames = [
       ...(replacedIndex === 0 ? [] : this.dimNames.slice(0, replacedIndex)),
-      // ...(batchDimName ? [batchDimName] : []),
       ...indexes.dimNames,
       ...this.dimNames.slice(replacedIndex + 1),
     ] as never as (Exclude<G, D> | G2)[];
@@ -829,7 +814,7 @@ export class GTensor<G extends DName> {
       this.tensor,
       indexes.tensor,
       replacedIndex,
-      // batchDimName ? indexes.dim[batchDimName].index : undefined
+      undefined,
     );
     return new GTensor<Exclude<G, D> | G2>(gathered, newDimNames);
   }

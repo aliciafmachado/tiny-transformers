@@ -19,7 +19,7 @@ import { DName, Dims, GTensor, gtensorOfDims } from './gtensor';
 import * as tf from '@tensorflow/tfjs';
 
 describe('gtensor', () => {
-  beforeEach(() => {});
+  beforeEach(() => { });
 
   it('creatingGTensors', () => {
     // Making a GTensor with an initializer:
@@ -708,6 +708,7 @@ describe('gtensor', () => {
     );
   });
 
+
   it('variable assign', () => {
     // Making a GTensor from a tensor by naming the dimensions:
     const x = new gtensor.GTensor(tf.tensor([1, 2, 3, 4]), ['foo']);
@@ -873,8 +874,8 @@ describe('gtensor', () => {
 
     type ExactGTensor<Exact extends string, Given extends string> =
       Exclude<Given, Exact> extends never
-        ? GTensor<Given>
-        : ErrorGivenHadExtraTypes<Exclude<Given, Exact>>;
+      ? GTensor<Given>
+      : ErrorGivenHadExtraTypes<Exclude<Given, Exact>>;
 
     function attentionHeadFn2<T extends string>(
       maybeInput: ExactGTensor<'seqLen' | 'inputRep', T>,

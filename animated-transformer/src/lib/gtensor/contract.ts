@@ -24,8 +24,7 @@ const FIRST_CHAR_CODE = 'A'.charCodeAt(0);
 // Captures the contraction behaviour for two tensors, and can express it as an
 // einsum strings, along with the co-contractions (to get da and db).
 export class ContractSpec<
-  A extends DName, B extends DName, C extends A & B>
-{
+  A extends DName, B extends DName, C extends A & B> {
   public aCharNames: string[];
   public bCharNames: string[];
   public contractCharNames: string[];
