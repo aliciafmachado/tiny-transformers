@@ -257,28 +257,27 @@ export function computeAttnHead(
   const attention = causalMask(rawAttention);
 
   // Dropout on the attention weights.
-  const attentionAfterDropout = dropout(spec.dropoutRate, attention, generator.random());
+  let attentionAfterDropout = dropout(spec.dropoutRate, attention, generator.random());
 
   const attendedValues = values
     .contract(attentionAfterDropout.rename('queryPos', 'pos'), ['pos'])
     .rename('keyPos', 'pos');
 
-  const headsReduction = attendedValues.contract(headsToInputRepM, ['value', 'heads']).pointwiseAdd(headsToInputRepMBias);;
+  let headsReduction = attendedValues.contract(headsToInputRepM, ['value', 'heads']).pointwiseAdd(headsToInputRepMBias);
 
   // Dropout before residual connection and layer norm.
-  let headsReductionAfterDropout = dropout(spec.dropoutRate, headsReduction, generator.random());
+  headsReduction = dropout(spec.dropoutRate, headsReduction, generator.random());
 
   // Residual after attention computation.
-  let headsReductionAfterResidual = headsReductionAfterDropout;
   if (spec.residuals) {
-    headsReductionAfterResidual = headsReductionAfterDropout.pointwiseAdd(seqInput.rename('inputRep', 'inputRepToFF'));
+    headsReduction = headsReduction.pointwiseAdd(seqInput.rename('inputRep', 'inputRepToFF'));
   }
 
-  let inputToFF = headsReductionAfterResidual;
+  let inputToFF = headsReduction;
   if (params.layerNormHeadsProjection) {
     inputToFF = layerNorm(
       params.layerNormHeadsProjection,
-      headsReductionAfterDropout,
+      headsReduction,
       'inputRepToFF',
       makeScalar(spec.layerNormEpsilon)
     );
@@ -302,7 +301,7 @@ export function computeAttnHead(
   // Residual after MLP.
   if (spec.residuals) {
     seqOutput = seqOutput.pointwiseAdd(
-      headsReductionAfterResidual.rename('inputRepToFF', 'inputRep')
+      headsReduction.rename('inputRepToFF', 'inputRep')
     );
   }
 

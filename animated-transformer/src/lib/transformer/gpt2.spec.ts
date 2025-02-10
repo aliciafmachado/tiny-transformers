@@ -20,7 +20,6 @@ import { prepareBasicTaskTokenRep, BasicTaskTokenRep } from '../tokens/token_gem
 import * as jstree from '../js_tree/js_tree';
 import r50k_base from "gpt-tokenizer/esm/encoding/r50k_base";
 import { makeRandomStream } from '../random/random';
-import { generate } from 'rxjs';
 
 function generateTestTask(): BasicTaskTokenRep {
   // The vocabulary size for GPT2 is 50257. However, the prepareBasicTaskToken adds four
