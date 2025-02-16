@@ -24,7 +24,7 @@ import {
   tokenizeAndMapToIdx,
   mapToIdx,
   embedBatch,
-  expectedOutputSeqPrepFn,
+  // expectedOutputSeqPrepFn,
 } from '../tokens/token_gemb';
 
 describe('token_gemb', () => {
@@ -136,34 +136,6 @@ describe('token_gemb', () => {
     expect(positionEmb[5].tensor.arraySync()).toEqual(aRep);
   });
 
-  it('expectedOutputSeqPrepFn', () => {
-    const tokens = ['a', 'b'];
-    const tokenRep = prepareBasicTaskTokenRep(tokens);
-    const batchInput: string[][] = [
-      ['a', 'b'],
-      ['b', 'a'],
-    ];
-    const batchOutput: string[][] = [['a'], ['b']];
-    const targetTokensOneHot = expectedOutputSeqPrepFn(
-      { config: { tokenRep } },
-      batchInput,
-      batchOutput,
-    );
-
-    const expectedOutputArr: number[][][] = [
-      [
-        [0, 1, 0, 0, 0, 0],
-        [1, 0, 0, 0, 0, 0],
-      ],
-      [
-        [1, 0, 0, 0, 0, 0],
-        [0, 1, 0, 0, 0, 0],
-      ],
-    ];
-
-    expect(targetTokensOneHot.tensor.arraySync()).toEqual(expectedOutputArr);
-    expect(targetTokensOneHot.dimNames).toEqual(['batch', 'pos', 'tokenId'])
-  });
   it('Test tokenizeAndMapToIdx', () => {
     // Mock a tokenizer for testing tokenizeAndMapToIdx.
     function tokenize_fn_test(input: string): number[] {
