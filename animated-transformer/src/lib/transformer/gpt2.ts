@@ -36,7 +36,7 @@ import { initLayerNormParamsWithDims, layerNorm, LayerNormParams } from '../gten
 import { dropout } from './dropout';
 import { BasicTaskTokenRep, StrSeqPrepFn, tokenizeAndMapToIdx, embedBatch } from '../tokens/token_gemb';
 import { RandomStream } from '../random/random';
-import { causalMask, BatchAttnHeadComputation, TransformerComputation, transformerTopPrediction, computeMaxInputLength } from './common_transformer';
+import { causalMask, BatchAttnHeadComputation, TransformerComputation, transformerTopPrediction, computeMaxInputLength, allPastTokensCrossEntropyLossWithIntegerLabels } from './common_transformer';
 
 export type Config = {
   id: string;
@@ -61,6 +61,7 @@ export type TransformerParamSpec = {
   addLayerNormBias: boolean;
   // Positional embeddings.
   addPosEmbeddings: boolean;
+  addAlphaParameter?: boolean;
   // Compute spec.
   computeSpec: TransformerComputeSpec;
 };
@@ -79,6 +80,7 @@ export type AttnHeadParamSpec = {
   layerNormHeadsProjection: boolean;
   layerNormPreAttention: boolean;
   addLayerNormBias: boolean;
+  addAlphaParameter?: boolean;
   // Note: residual spec don't introduce params, so they are not here.
   // It's only relevant to computation.
   // Note: dropout spec don't introduce params, so they are not here either.
@@ -148,6 +150,11 @@ export type FfParams<Input extends DName, Output extends DName> = {
   b: GTensor<Output>;
 };
 
+export type AlphaParams = {
+  alphaFirst: GTensor<never>;
+  alphaSecond: GTensor<never>;
+}
+
 // Use of type here to be compatible with generic params.
 export type AttnHeadParams = {
   queryM: GTensor<'heads' | 'inputRep' | 'kq'>;
@@ -162,6 +169,7 @@ export type AttnHeadParams = {
   layerNormPreAttention?: LayerNormParams<'inputRep'>;
   ff1: FfParams<'inputRepToFF', 'hiddenRep'>;
   ff2: FfParams<'hiddenRep', 'inputRep'>;
+  alphaParams?: AlphaParams;
 };
 
 // Use of type here to be compatible with generic params.
@@ -179,6 +187,13 @@ export type TransformerModel = {
   config: Config;
   params: TransformerParams;
 };
+
+export function initAlphaParams(): AlphaParams {
+  return {
+    alphaFirst: makeScalar(1, "float32"),
+    alphaSecond: makeScalar(1, "float32"),
+  };
+}
 
 export function initAttnHeadParams(
   spec: AttnHeadParamSpec,
@@ -211,6 +226,9 @@ export function initAttnHeadParams(
   }
   if (spec.layerNormHeadsProjection) {
     attnHeadParams.layerNormHeadsProjection = initLayerNormParamsWithDims(spec.addLayerNormBias, { 'inputRepToFF': inputRep });
+  }
+  if (spec.addAlphaParameter) {
+    attnHeadParams.alphaParams = initAlphaParams();
   }
   return attnHeadParams;
 }
@@ -273,6 +291,11 @@ export function computeAttnHead(
   if (spec.residuals) {
     headsReductionAfterResidual = headsReductionAfterDropout.pointwiseAdd(seqInput.rename('inputRep', 'inputRepToFF'));
   }
+  if (params.alphaParams) {
+    headsReductionAfterResidual = headsReductionAfterDropout.pointwiseMul(
+      params.alphaParams.alphaFirst).pointwiseAdd(seqInput.rename(
+        'inputRep', 'inputRepToFF').pointwiseMul(makeScalar(1).pointwiseSub(params.alphaParams.alphaFirst)));
+  }
 
   let inputToFF = headsReductionAfterResidual;
   if (params.layerNormHeadsProjection) {
@@ -305,6 +328,11 @@ export function computeAttnHead(
       headsReductionAfterResidual.rename('inputRepToFF', 'inputRep')
     );
   }
+  if (params.alphaParams) {
+    headsReductionAfterResidual = headsReductionAfterDropout.pointwiseMul(
+      params.alphaParams.alphaSecond).pointwiseAdd(seqInput.rename(
+        'inputRep', 'inputRepToFF').pointwiseMul(makeScalar(1).pointwiseSub(params.alphaParams.alphaSecond)));
+  }
 
   return {
     seqInput,
@@ -332,6 +360,7 @@ export function initDecoderParams(config: Config): TransformerParams {
       layerNormHeadsProjection: layerSpec.layerNormHeadsProjection,
       // addLayerNormBias: AttentionIsAllYouNeed = true; T5 = false.
       addLayerNormBias: layerSpec.addLayerNormBias,
+      addAlphaParameter: spec.addAlphaParameter,
     };
     return initAttnHeadParams(attnHeadSpec, init);
   });

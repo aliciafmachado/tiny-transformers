@@ -32,11 +32,11 @@ function generateTestTask(): BasicTaskTokenRep {
   return prepareBasicTaskTokenRep(tokens);
 }
 
-function generateTestGPT2Config(): gpt2.Config {
+function generateTestGPT2Config(alphaParams: boolean = false): gpt2.Config {
   // Set dummy transformer for testing.
   const embeddingSize = 2;
   const posEmbeddings = 3;
-  const nHeads = 1;
+  const nHeads = 2;
   const layerConfig: gpt2.TransformerParamLayerSpec = {
     nHeads: nHeads,
     layerNormPreAttention: false,
@@ -56,6 +56,7 @@ function generateTestGPT2Config(): gpt2.Config {
     layerNorm: false,
     addLayerNormBias: false,
     addPosEmbeddings: true,
+    addAlphaParameter: alphaParams,
   };
   const config: gpt2.Config = {
     id: 'GPT2Eval',
@@ -161,5 +162,24 @@ describe('GTensor Transformers', () => {
       model, r50k_base.encode, r50k_base.decode, input, generator);
 
     expect(result.length).toEqual(2);
+  });
+
+  it('Test forward pass in GPT2 with alpha parameters', () => {
+    const gpt2Model: gpt2.Config = generateTestGPT2Config();
+    const gpt2ModelWithAlpha: gpt2.Config = generateTestGPT2Config(true);
+    const params = gpt2.initDecoderParams(gpt2Model);
+    const paramsWithAlpha = gpt2.initDecoderParams(gpt2ModelWithAlpha);
+    const paramCount = jstree.reduce<GTensor<any>, number>(
+      (count, paramObj) => count + paramObj.tensor.size,
+      0,
+      params
+    );
+    const paramCountForAlpha = jstree.reduce<GTensor<any>, number>(
+      (count, paramObj) => count + paramObj.tensor.size,
+      0,
+      paramsWithAlpha
+    );
+
+    expect(paramCountForAlpha - paramCount).toEqual(4);
   });
 });
