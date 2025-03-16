@@ -803,6 +803,13 @@ export class GTensor<G extends DName> {
     );
   }
 
+  public clipByValue(clipValueMin: number, clipValueMax: number): GTensor<G> {
+    return new GTensor(
+      tf.clipByValue(this.tensor, clipValueMin, clipValueMax),
+      this.dimNames,
+    );
+  }
+
   public pointwiseEqual(g2: GTensor<G>): GTensor<G> {
     return new GTensor<G>(this.tensor.equal(g2.tensor), this.dimNames);
   }

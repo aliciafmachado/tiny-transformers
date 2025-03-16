@@ -188,10 +188,10 @@ export type TransformerModel = {
   params: TransformerParams;
 };
 
-export function initAlphaParams(): AlphaParams {
+export function initAlphaParams(init_value: number = 0.1): AlphaParams {
   return {
-    alphaFirst: makeScalar(1, "float32"),
-    alphaSecond: makeScalar(1, "float32"),
+    alphaFirst: makeScalar(init_value, "float32"),
+    alphaSecond: makeScalar(init_value, "float32"),
   };
 }
 
@@ -293,8 +293,8 @@ export function computeAttnHead(
   }
   if (params.alphaParams) {
     headsReductionAfterResidual = headsReductionAfterDropout.pointwiseMul(
-      params.alphaParams.alphaFirst).pointwiseAdd(seqInput.rename(
-        'inputRep', 'inputRepToFF').pointwiseMul(makeScalar(1).pointwiseSub(params.alphaParams.alphaFirst)));
+      params.alphaParams.alphaFirst.clipByValue(0, 1)).pointwiseAdd(seqInput.rename(
+        'inputRep', 'inputRepToFF').pointwiseMul(makeScalar(1).pointwiseSub(params.alphaParams.alphaFirst.clipByValue(0, 1))));
   }
 
   let inputToFF = headsReductionAfterResidual;
@@ -329,9 +329,9 @@ export function computeAttnHead(
     );
   }
   if (params.alphaParams) {
-    headsReductionAfterResidual = headsReductionAfterDropout.pointwiseMul(
-      params.alphaParams.alphaSecond).pointwiseAdd(seqInput.rename(
-        'inputRep', 'inputRepToFF').pointwiseMul(makeScalar(1).pointwiseSub(params.alphaParams.alphaSecond)));
+    seqOutput = seqOutput.pointwiseMul(
+      params.alphaParams.alphaSecond.clipByValue(0, 1)).pointwiseAdd(headsReductionAfterResidual.rename(
+        'inputRepToFF', 'inputRep').pointwiseMul(makeScalar(1).pointwiseSub(params.alphaParams.alphaSecond.clipByValue(0, 1))));
   }
 
   return {
