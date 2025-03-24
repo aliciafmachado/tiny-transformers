@@ -188,7 +188,7 @@ export type TransformerModel = {
   params: TransformerParams;
 };
 
-export function initAlphaParams(init_value: number = 0.1): AlphaParams {
+export function initAlphaParams(init_value: number = 0): AlphaParams {
   return {
     alphaFirst: makeScalar(init_value, "float32"),
     alphaSecond: makeScalar(init_value, "float32"),
@@ -292,9 +292,17 @@ export function computeAttnHead(
     headsReductionAfterResidual = headsReductionAfterDropout.pointwiseAdd(seqInput.rename('inputRep', 'inputRepToFF'));
   }
   if (params.alphaParams) {
+    const alphaFirstClipped = params.alphaParams.alphaFirst; // .clipByValue(-1, 1);
+    const normalize = true;
+
     headsReductionAfterResidual = headsReductionAfterDropout.pointwiseMul(
-      params.alphaParams.alphaFirst.clipByValue(0, 1)).pointwiseAdd(seqInput.rename(
-        'inputRep', 'inputRepToFF').pointwiseMul(makeScalar(1).pointwiseSub(params.alphaParams.alphaFirst.clipByValue(0, 1))));
+      alphaFirstClipped).pointwiseAdd(seqInput.rename(
+        'inputRep', 'inputRepToFF').pointwiseMul(makeScalar(1).pointwiseSub(alphaFirstClipped)));
+
+    if (normalize) {
+      headsReductionAfterResidual.pointwiseDiv(
+        (alphaFirstClipped.squared().pointwiseAdd(makeScalar(1).pointwiseSub(alphaFirstClipped)).squared()).sqrt());
+    }
   }
 
   let inputToFF = headsReductionAfterResidual;
@@ -325,13 +333,14 @@ export function computeAttnHead(
   // Residual after MLP.
   if (spec.residuals) {
     seqOutput = seqOutput.pointwiseAdd(
-      headsReductionAfterResidual.rename('inputRepToFF', 'inputRep')
-    );
+      headsReductionAfterResidual.rename('inputRepToFF', 'inputRep'));
   }
   if (params.alphaParams) {
+    const alphaSecondClipped = params.alphaParams.alphaSecond  //.clipByValue(-1, 1);
     seqOutput = seqOutput.pointwiseMul(
-      params.alphaParams.alphaSecond.clipByValue(0, 1)).pointwiseAdd(headsReductionAfterResidual.rename(
-        'inputRepToFF', 'inputRep').pointwiseMul(makeScalar(1).pointwiseSub(params.alphaParams.alphaSecond.clipByValue(0, 1))));
+      alphaSecondClipped).pointwiseAdd(headsReductionAfterResidual.rename(
+        'inputRepToFF', 'inputRep').pointwiseMul(makeScalar(1).pointwiseSub(alphaSecondClipped))).pointwiseDiv(
+          alphaSecondClipped.squared().pointwiseAdd(makeScalar(1).pointwiseSub(alphaSecondClipped)).squared());
   }
 
   return {

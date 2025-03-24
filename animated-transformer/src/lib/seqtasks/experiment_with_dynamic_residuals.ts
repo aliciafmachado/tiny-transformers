@@ -53,13 +53,17 @@ const tfjsBackendName = tf.getBackend();
 console.log('tfjs backend:', tfjsBackendName);
 
 const printEveryNBatches = 10;
-const useResiduals = true;
-const useAlphaParams = false;
+const useResiduals = false;
+const useAlphaParams = true;
 const learningRate = 1e-3;
-const nIterations = 300;
+const nIterations = 100;
 const nBatchSize = 64;
-const unfreezeEveryNSteps = 50;
+const unfreezeEveryNSteps = 1000;
+const nHeads = 6;
+const startFreezingAtIndex = nHeads;
 
+// Store losses for plotting.
+let losses: number[] = [];
 
 function getTaskConfig(): TinyWorldTaskConfig {
   const taskConfig: TinyWorldTaskConfig = {
@@ -166,9 +170,9 @@ function computeLoss(
     console.log(
       `alphaSecond: ${model.params.layers.map((g) => g.alphaParams?.alphaSecond.tensor.asScalar().arraySync().toFixed(8))}`
     )
-    // TODO: print grads
-
   }
+  // Store loss for plotting.
+  losses.push(entropyLoss.arraySync());
   return entropyLoss;
 }
 
@@ -191,17 +195,13 @@ function unfreezeAlphaParamsAt(transformerParams: TransformerParams, index: numb
   }
 }
 
-// function testParams(transformerParams: jstree.DictArrTree<GTensor<any>>): jstree.DictArrTree<GTensor<any>> {
-//   return transformerParams;
-// }
-
 function run() {
   // define task
   const trainTaskConfig = getTaskConfig();
   const trainTask = new TinyWorldTask(trainTaskConfig);
 
   // define vocab & decoder
-  const Config = initTransformerConfig(trainTask.baseVocab, 6, useAlphaParams, useResiduals);
+  const Config = initTransformerConfig(trainTask.baseVocab, nHeads, useAlphaParams, useResiduals);
   const decoderParams = varifyParams(initDecoderParams(Config));
   const model: TransformerModel = {
     config: Config,
@@ -211,7 +211,7 @@ function run() {
 
   // By manipulating decoderParams, you can selectively limit what parameters
   // get tuned. By manipulating, we mean changing the trainable state to false.
-  initParametersTrainableButAlphaFrom(decoderParams as TransformerParams, 1);
+  initParametersTrainableButAlphaFrom(decoderParams as TransformerParams, startFreezingAtIndex);
   let paramsList = listifyVarParams(decoderParams).map((g) => g.variable);
   let unfreezeId = 1;
 
@@ -226,7 +226,7 @@ function run() {
       optimizer.minimize(
         () => computeLoss(model, randomStream, batchId, inputs, outputs),
         false,
-        paramsList
+        paramsList,
       );
       batchId += 1;
 
