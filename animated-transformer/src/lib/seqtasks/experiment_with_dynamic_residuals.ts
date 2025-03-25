@@ -23,6 +23,11 @@ Run:
 */
 
 import * as tf from '@tensorflow/tfjs-node';
+import * as Plot from '@observablehq/plot';
+import sharp from "sharp";
+import fs from "fs";
+import { JSDOM } from "jsdom";
+
 
 import {
   TransformerComputation,
@@ -52,18 +57,36 @@ import { RandomStream, makeRandomStream } from '../random/random';
 const tfjsBackendName = tf.getBackend();
 console.log('tfjs backend:', tfjsBackendName);
 
-const printEveryNBatches = 10;
-const useResiduals = false;
-const useAlphaParams = true;
-const learningRate = 1e-3;
-const nIterations = 100;
-const nBatchSize = 64;
-const unfreezeEveryNSteps = 1000;
-const nHeads = 6;
-const startFreezingAtIndex = nHeads;
+const printEveryNBatches = 100;
+// const useResiduals = false;
+// const useAlphaParams = true;
+// const learningRate = 1e-3;
+// const nIterations = 100;
+// const nBatchSize = 64;
+// const unfreezeEveryNSteps = 1000;
+// const nHeads = 3;
+// const startFreezingAtIndex = nHeads;
+// const seed = 42;
 
-// Store losses for plotting.
-let losses: number[] = [];
+interface Metric {
+  loss: number;
+  step: number;
+  alphaParam1?: number;
+  alphaParam2?: number;
+}
+
+interface ExperimentConfig {
+  name: string,
+  useResiduals: boolean,
+  useAlphaParams: boolean,
+  learningRate: number,
+  nIterations: number,
+  nBatchSize: number,
+  unfreezeEveryNSteps: number,
+  nHeads: number;
+  startFreezingAtIndex: number,
+  seed: number,
+}
 
 function getTaskConfig(): TinyWorldTaskConfig {
   const taskConfig: TinyWorldTaskConfig = {
@@ -75,7 +98,7 @@ function getTaskConfig(): TinyWorldTaskConfig {
 }
 
 function initTransformerConfig(baseVocab: string[], nHeads: number = 6, alphaParams: boolean = false,
-  residuals: boolean = true,
+  residuals: boolean = true, seed: number,
 ): Config {
   // Set dummy transformer for testing.
   const embeddingSize = 16; // 64 * 12 originally
@@ -109,7 +132,7 @@ function initTransformerConfig(baseVocab: string[], nHeads: number = 6, alphaPar
     init: {
       stddev: 0.05, // default
       mean: 0,
-      seed: 42,
+      seed: seed,
     },
   };
   return config;
@@ -145,7 +168,8 @@ function computeLoss(
   randomStream: RandomStream,
   batchId: number,
   batchInput: string[][],
-  batchOutput: string[][]
+  batchOutput: string[][],
+  thisExperimentMetrics: Metric[],
 ): tf.Scalar {
   const maxInputLength = batchInput.reduce(
     (max, curInput) => (max >= curInput.length ? max : curInput.length),
@@ -159,6 +183,7 @@ function computeLoss(
   );
   const targetTokens = expectedOutputSeqPrepFn(model, batchInput, batchOutput);
   const entropyLoss: tf.Scalar = allPastTokensCrossEntropyLossWithIntegerLabels(model, computation, targetTokens);
+  // const alphaFirst
   if (batchId % printEveryNBatches === 0) {
     console.log(
       `batch: ${batchId} `.padEnd(15) +
@@ -172,7 +197,7 @@ function computeLoss(
     )
   }
   // Store loss for plotting.
-  losses.push(entropyLoss.arraySync());
+  thisExperimentMetrics.push({ "loss": entropyLoss.arraySync(), "step": batchId });
   return entropyLoss;
 }
 
@@ -195,42 +220,46 @@ function unfreezeAlphaParamsAt(transformerParams: TransformerParams, index: numb
   }
 }
 
-function run() {
+function run(experimentConfig: ExperimentConfig) {
+  // initialize metrics
+  let thisExperimentMetrics: Metric[] = [];
   // define task
   const trainTaskConfig = getTaskConfig();
   const trainTask = new TinyWorldTask(trainTaskConfig);
 
   // define vocab & decoder
-  const Config = initTransformerConfig(trainTask.baseVocab, nHeads, useAlphaParams, useResiduals);
+  const Config = initTransformerConfig(trainTask.baseVocab, experimentConfig.nHeads, experimentConfig.useAlphaParams, experimentConfig.useResiduals,
+    experimentConfig.seed
+  );
   const decoderParams = varifyParams(initDecoderParams(Config));
   const model: TransformerModel = {
     config: Config,
     params: decoderParams as TransformerParams,
   };
-  const randomStream = makeRandomStream(42);
+  const randomStream = makeRandomStream(experimentConfig.seed);
 
   // By manipulating decoderParams, you can selectively limit what parameters
   // get tuned. By manipulating, we mean changing the trainable state to false.
-  initParametersTrainableButAlphaFrom(decoderParams as TransformerParams, startFreezingAtIndex);
+  initParametersTrainableButAlphaFrom(decoderParams as TransformerParams, experimentConfig.startFreezingAtIndex);
   let paramsList = listifyVarParams(decoderParams).map((g) => g.variable);
-  let unfreezeId = 1;
+  let unfreezeId = experimentConfig.startFreezingAtIndex;
 
   {
     // train with optimization
-    const batchNum: number = nIterations;
-    const batchSize: number = nBatchSize;
+    const batchNum: number = experimentConfig.nIterations;
+    const batchSize: number = experimentConfig.nBatchSize;
 
-    let optimizer = tf.train.adam(learningRate);
+    let optimizer = tf.train.adam(experimentConfig.learningRate);
     for (let batch of batchGenerator(trainTask, batchNum, batchSize)) {
       let { batchId, inputs, outputs } = batch;
       optimizer.minimize(
-        () => computeLoss(model, randomStream, batchId, inputs, outputs),
+        () => computeLoss(model, randomStream, batchId, inputs, outputs, thisExperimentMetrics),
         false,
         paramsList,
       );
       batchId += 1;
 
-      if (batchId % unfreezeEveryNSteps == 0 && unfreezeId < decoderParams.layers.length) {
+      if (batchId % experimentConfig.unfreezeEveryNSteps == 0 && unfreezeId < decoderParams.layers.length) {
         unfreezeAlphaParamsAt(decoderParams, unfreezeId);
         paramsList = listifyVarParams(decoderParams).map((g) => g.variable);
         unfreezeId += 1;
@@ -307,6 +336,83 @@ function run() {
       console.log('   ', token.str.padEnd(10), ' ', token.prob.toFixed(8), ' ', mark);
     }
   } // infer
+
+  return thisExperimentMetrics;
 } // run
 
-run();
+function launchExperimentsAndPlot(setOfExpsName: string, configs: ExperimentConfig[]) {
+  console.log("Launching experiment " + setOfExpsName);
+  console.log("Configs are:");
+  console.log(configs);
+  let experimentMetrics: [string, Metric[]][] = [];
+  configs.map((config) => experimentMetrics.push([config.name, run(config)]));
+
+  // Plotting function etc...
+  // const plot = Plot.line([Array(losses.length), losses] as [number, number][]);
+  // Construct the correct data array
+  let b = experimentMetrics.flatMap(([name, values]) => values.flatMap(d => ({ name, ...d })));
+
+  let plot = Plot.plot({
+    document: new JSDOM("").window.document,
+    marks: [Plot.lineY(b, { x: "step", y: "loss", stroke: "name" }), Plot.text(b, Plot.selectLast(
+      { x: "step", y: "loss", z: "name", text: "name" }))
+    ],
+    x: {
+      label: "Step", // X-axis label
+    },
+    y: {
+      label: "Loss", // Y-axis labes
+    },
+  });
+
+  async function callSharp(): Promise<void> {
+    try {
+      const buffer: Buffer = await sharp(Buffer.from(plot.outerHTML, "utf-8")).png().toBuffer();
+      fs.writeFileSync(setOfExpsName + ".png", buffer);
+      console.log("PNG image saved as " + setOfExpsName + ".png");
+    } catch (error) {
+      console.error("Error saving PNG:", error);
+    }
+  }
+
+  callSharp();
+}
+
+const cfgs: ExperimentConfig[] = [{
+  "learningRate": 1e-3,
+  "nBatchSize": 64,
+  "nHeads": 3,
+  "name": "dynamic_residuals",
+  "seed": 42,
+  "useAlphaParams": true,
+  "useResiduals": false,
+  "startFreezingAtIndex": 3,
+  "unfreezeEveryNSteps": 1000,
+  "nIterations": 300,
+},
+{
+  "learningRate": 1e-3,
+  "nBatchSize": 64,
+  "nHeads": 3,
+  "name": "with_residuals",
+  "seed": 42,
+  "useAlphaParams": false,
+  "useResiduals": true,
+  "startFreezingAtIndex": 3,
+  "unfreezeEveryNSteps": 1000,
+  "nIterations": 300,
+},
+{
+  "learningRate": 1e-3,
+  "nBatchSize": 64,
+  "nHeads": 3,
+  "name": "no_residuals",
+  "seed": 42,
+  "useAlphaParams": false,
+  "useResiduals": false,
+  "startFreezingAtIndex": 3,
+  "unfreezeEveryNSteps": 1000,
+  "nIterations": 300,
+}]
+
+launchExperimentsAndPlot("exp_1", cfgs);
