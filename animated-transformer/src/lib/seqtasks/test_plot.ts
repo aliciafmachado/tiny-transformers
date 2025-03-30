@@ -2,7 +2,6 @@ import * as Plot from '@observablehq/plot';
 import { JSDOM } from "jsdom";
 import sharp from "sharp";
 import fs from "fs";
-import { Dictionary } from 'underscore';
 
 interface Metric {
     loss: number;
@@ -26,26 +25,42 @@ let b = a.flatMap(([name, values]) => values.flatMap(d => ({ name, ...d })));
 
 let plot = Plot.plot({
     document: new JSDOM("").window.document,
-    marks: [Plot.lineY(b, { x: "step", y: "loss", stroke: "name" }), Plot.text(b, Plot.selectLast(
-        { x: "step", y: "loss", z: "name", text: "name", textAnchor: "start", dx: 3 }))
+    marks: [
+        Plot.frame(),
+        Plot.lineY(b, { x: "step", y: "loss", stroke: "name" }),
+        Plot.text(b, Plot.selectLast(
+            { x: "step", y: "loss", z: "name", text: "name", textAnchor: "start", dx: 3 })),
+        Plot.text(['Loss computation.'], { frameAnchor: "top", dy: -30 }),
     ],
-    width: 500,
-    height: 500,
+    color: { legend: true },
+    figure: false,
     x: {
-        label: "Epoch", // X-axis label
+        label: "Step", // X-axis label
         labelAnchor: "center",
+        // n epochs.
+        domain: [0, 2],
     },
     y: {
         label: "Loss", // Y-axis labes
         labelAnchor: "center",
+        domain: [0, 1],
     },
+    // This does not do anything...
+    // style: {
+    //     background: 'white'
+    // },
+    marginTop: 40,
+    marginRight: 40,
 });
 
-let svgString = plot.outerHTML;
-// const svgString: string = plot.outerHTML.replace(
-//     "<svg",
-//     `<svg><rect width="100%" height="100%" fill="white"/>`
-// );
+// TODO(@aliciafmachado): Not sure how to merge the legend plot into the other plot.
+// const legend = Plot.legend({ color: { type: "linear" } });
+
+// TODO(@aliciafmachado): Hacky way to pass the background.
+const svgString: string = plot.outerHTML.replace(
+    "<style>",
+    `<rect width="100%" height="100%" fill="white"/><style>`
+);
 
 async function callSharp(): Promise<void> {
     try {
