@@ -53,28 +53,23 @@ import {
 } from '../tokens/token_gemb';
 import { varifyParams, listifyVarParams } from '../gtensor/params';
 import { RandomStream, makeRandomStream } from '../random/random';
+import { isNumber } from 'underscore';
 
 const tfjsBackendName = tf.getBackend();
 console.log('tfjs backend:', tfjsBackendName);
 
-const printEveryNBatches = 100;
-// const useResiduals = false;
-// const useAlphaParams = true;
-// const learningRate = 1e-3;
-// const nIterations = 100;
-// const nBatchSize = 64;
-// const unfreezeEveryNSteps = 1000;
-// const nHeads = 3;
-// const startFreezingAtIndex = nHeads;
-// const seed = 42;
+const printEveryNBatches = 10;
 
 interface Metric {
   loss: number;
   step: number;
-  alphaParam1?: number;
-  alphaParam2?: number;
+  alphaFirstParams?: number[];
+  alphaSecondParams?: number[];
 }
 
+const availableMetrics: string[] = ["loss", "alphaFirstParams", "alphaSecondParams"];
+
+// TODO: this should be a class with default values. 
 interface ExperimentConfig {
   name: string,
   useResiduals: boolean,
@@ -86,6 +81,23 @@ interface ExperimentConfig {
   nHeads: number;
   startFreezingAtIndex: number,
   seed: number,
+}
+
+const MAXNUMBER = 1000;
+
+function defaultConfigs(config: Partial<ExperimentConfig> = {}): ExperimentConfig {
+  return {
+    name: config.name ?? "defaultExperiment",
+    useResiduals: config.useResiduals ?? true,
+    useAlphaParams: config.useAlphaParams ?? false,
+    learningRate: config.learningRate ?? 0.001,
+    nIterations: config.nIterations ?? 100,
+    nBatchSize: config.nBatchSize ?? 64,
+    unfreezeEveryNSteps: config.unfreezeEveryNSteps ?? MAXNUMBER,
+    nHeads: config.nHeads ?? 3,
+    startFreezingAtIndex: config.startFreezingAtIndex ?? MAXNUMBER,
+    seed: config.seed ?? 0,
+  };
 }
 
 function getTaskConfig(): TinyWorldTaskConfig {
@@ -183,21 +195,35 @@ function computeLoss(
   );
   const targetTokens = expectedOutputSeqPrepFn(model, batchInput, batchOutput);
   const entropyLoss: tf.Scalar = allPastTokensCrossEntropyLossWithIntegerLabels(model, computation, targetTokens);
-  // const alphaFirst
+  let metric: Metric = { "loss": entropyLoss.arraySync(), "step": batchId };
+
+  const alphaFirsts = model.params.layers.map((g) => g.alphaParams?.alphaFirst.tensor.asScalar().arraySync());
+  const alphaSeconds = model.params.layers.map((g) => g.alphaParams?.alphaSecond.tensor.asScalar().arraySync());
+  if (alphaFirsts[0] !== undefined) {
+    metric.alphaFirstParams = alphaFirsts as number[];
+  }
+  if (alphaSeconds[0] !== undefined) {
+    metric.alphaSecondParams = alphaSeconds as number[];
+  }
+
   if (batchId % printEveryNBatches === 0) {
     console.log(
       `batch: ${batchId} `.padEnd(15) +
       ('entropyLoss: ' + entropyLoss.arraySync().toFixed(8)).padEnd(25)
     );
-    console.log(
-      `alphaFirst: ${model.params.layers.map((g) => g.alphaParams?.alphaFirst.tensor.asScalar().arraySync().toFixed(8))}`
-    )
-    console.log(
-      `alphaSecond: ${model.params.layers.map((g) => g.alphaParams?.alphaSecond.tensor.asScalar().arraySync().toFixed(8))}`
-    )
+    if (alphaFirsts[0] !== undefined) {
+      console.log(
+        `alphaFirst: ${alphaFirsts.map((g) => g?.toFixed(8))}`
+      )
+    }
+    if (alphaSeconds[0] !== undefined) {
+      console.log(
+        `alphaSecond: ${alphaSeconds.map((g) => g?.toFixed(8))}`
+      )
+    }
   }
   // Store loss for plotting.
-  thisExperimentMetrics.push({ "loss": entropyLoss.arraySync(), "step": batchId });
+  thisExperimentMetrics.push(metric);
   return entropyLoss;
 }
 
@@ -340,36 +366,70 @@ function run(experimentConfig: ExperimentConfig) {
   return thisExperimentMetrics;
 } // run
 
-function launchExperimentsAndPlot(setOfExpsName: string, configs: ExperimentConfig[]) {
-  console.log("Launching experiment " + setOfExpsName);
-  console.log("Configs are:");
-  console.log(configs);
-  let experimentMetrics: [string, Metric[]][] = [];
-  configs.map((config) => experimentMetrics.push([config.name, run(config)]));
+function printMetric(setOfExpsName: string, experimentMetrics: [string, Metric[]][], metricName: keyof Metric, layerIndex: number = 0) {
+  // Will print a new image called {exp_name}_{metric_name}.
+  function ifArrayExtractIndex(value: number | Array<number>, index: number): number {
+    if (isNumber(value)) {
+      return value;
+    }
+    return (value as Array<number>)[index];
+  }
+
+  function filterOutOtherMetrics(value: Metric): {
+    [key: string]: number,
+    "step": number
+  } {
+    return {
+      [metricName]: ifArrayExtractIndex(value[metricName] ?? 0, layerIndex),
+      "step": value["step"],
+    }
+  }
+
+  let b = experimentMetrics.flatMap(([name, values]) => values.filter(
+    (value) => value[metricName] !== undefined).flatMap(d => ({ name, ...filterOutOtherMetrics(d) })));
+
+  let suffix = "";
+  let name_suffix = "_layer_" + layerIndex;
+  if (metricName == "alphaFirstParams" || metricName == "alphaSecondParams") {
+    suffix = " for layer " + layerIndex;
+  }
 
   // Plotting function etc...
-  // const plot = Plot.line([Array(losses.length), losses] as [number, number][]);
   // Construct the correct data array
-  let b = experimentMetrics.flatMap(([name, values]) => values.flatMap(d => ({ name, ...d })));
-
   let plot = Plot.plot({
     document: new JSDOM("").window.document,
-    marks: [Plot.lineY(b, { x: "step", y: "loss", stroke: "name" }), Plot.text(b, Plot.selectLast(
-      { x: "step", y: "loss", z: "name", text: "name" }))
+    marks: [
+      Plot.frame(),
+      Plot.lineY(b, { x: "step", y: metricName, stroke: "name" }),
+      Plot.text(b, Plot.selectLast(
+        { x: "step", y: metricName, z: "name", text: "name", textAnchor: "start", dx: 3 })),
+      Plot.text(['Plot of ' + metricName + ' against number of steps' + suffix], { frameAnchor: "top", dy: -30 }),
     ],
+    figure: false,
     x: {
-      label: "Step", // X-axis label
+      label: "Step",
+      labelAnchor: "center",
     },
     y: {
-      label: "Loss", // Y-axis labes
+      label: metricName,
+      labelAnchor: "center",
     },
+    marginTop: 40,
+    marginLeft: 40,
+    marginRight: 40,
   });
+
+  const outerHTMLWithBackground: string = plot.outerHTML.replace(
+    "<style>",
+    `<rect width="100%" height="100%" fill="white"/><style>`
+  );
 
   async function callSharp(): Promise<void> {
     try {
-      const buffer: Buffer = await sharp(Buffer.from(plot.outerHTML, "utf-8")).png().toBuffer();
-      fs.writeFileSync(setOfExpsName + ".png", buffer);
-      console.log("PNG image saved as " + setOfExpsName + ".png");
+      const buffer: Buffer = await sharp(Buffer.from(outerHTMLWithBackground, "utf-8")).png().toBuffer();
+      const nameToSave = setOfExpsName + "_" + metricName + name_suffix + ".png";
+      fs.writeFileSync(nameToSave, buffer);
+      console.log("PNG image saved as " + nameToSave);
     } catch (error) {
       console.error("Error saving PNG:", error);
     }
@@ -378,41 +438,155 @@ function launchExperimentsAndPlot(setOfExpsName: string, configs: ExperimentConf
   callSharp();
 }
 
-const cfgs: ExperimentConfig[] = [{
-  "learningRate": 1e-3,
-  "nBatchSize": 64,
-  "nHeads": 3,
-  "name": "dynamic_residuals",
-  "seed": 42,
+function launchExperimentsAndPlot(setOfExpsName: string, partialConfigs: Partial<ExperimentConfig>[]) {
+  // First set other arguments:
+  const configs = partialConfigs.map((value) => defaultConfigs(value));
+  console.log("Launching experiment " + setOfExpsName);
+  console.log("Number of experiments is " + configs.length);
+  console.log("Configs are:");
+  console.log(configs);
+  let experimentMetrics: [string, Metric[]][] = [];
+  configs.map((config) => experimentMetrics.push([config.name, run(config)]));
+
+  // Plot metrics.
+  for (const metric of availableMetrics) {
+    if (metric == "loss")
+      printMetric(setOfExpsName, experimentMetrics, metric as keyof Metric);
+    else {
+      for (let i = 0; i < configs[0].nHeads; i++) {
+        printMetric(setOfExpsName, experimentMetrics, metric as keyof Metric, i);
+      }
+    }
+  }
+}
+
+// const cfgs: ExperimentConfig[] = [{
+//   "learningRate": 1e-3,
+//   "nBatchSize": 64,
+//   "nHeads": 3,
+//   "name": "dynamic_residuals",
+//   "seed": 42,
+//   "useAlphaParams": true,
+//   "useResiduals": false,
+//   "startFreezingAtIndex": 3,
+//   "unfreezeEveryNSteps": 1000,
+//   "nIterations": 300,
+// },
+// {
+//   "learningRate": 1e-3,
+//   "nBatchSize": 64,
+//   "nHeads": 3,
+//   "name": "with_residuals",
+//   "seed": 42,
+//   "useAlphaParams": false,
+//   "useResiduals": true,
+//   "startFreezingAtIndex": 3,
+//   "unfreezeEveryNSteps": 1000,
+//   "nIterations": 300,
+// },
+// {
+//   "learningRate": 1e-3,
+//   "nBatchSize": 64,
+//   "nHeads": 3,
+//   "name": "no_residuals",
+//   "seed": 42,
+//   "useAlphaParams": false,
+//   "useResiduals": false,
+//   "startFreezingAtIndex": 3,
+//   "unfreezeEveryNSteps": 1000,
+//   "nIterations": 300,
+// }]
+// const cfgs: ExperimentConfig[] = [{
+//   "learningRate": 1e-3,
+//   "nBatchSize": 64,
+//   "nHeads": 3,
+//   "name": "seed 1",
+//   "seed": 1,
+//   "useAlphaParams": true,
+//   "useResiduals": false,
+//   "startFreezingAtIndex": 3,
+//   "unfreezeEveryNSteps": 1000,
+//   "nIterations": 300,
+// },
+// {
+//   "learningRate": 1e-3,
+//   "nBatchSize": 64,
+//   "nHeads": 3,
+//   "name": "seed 2",
+//   "seed": 2,
+//   "useAlphaParams": true,
+//   "useResiduals": false,
+//   "startFreezingAtIndex": 3,
+//   "unfreezeEveryNSteps": 1000,
+//   "nIterations": 300,
+// },
+// {
+//   "learningRate": 1e-3,
+//   "nBatchSize": 64,
+//   "nHeads": 3,
+//   "name": "seed 3",
+//   "seed": 3,
+//   "useAlphaParams": true,
+//   "useResiduals": false,
+//   "startFreezingAtIndex": 3,
+//   "unfreezeEveryNSteps": 1000,
+//   "nIterations": 300,
+// }]
+// const cfgs: ExperimentConfig[] = [{
+//   "learningRate": 1e-3,
+//   "nBatchSize": 64,
+//   "nHeads": 6,
+//   "name": "seed 1",
+//   "seed": 1,
+//   "useAlphaParams": true,
+//   "useResiduals": false,
+//   "startFreezingAtIndex": 6,
+//   "unfreezeEveryNSteps": 1000,
+//   "nIterations": 300,
+// },
+// {
+//   "learningRate": 1e-3,
+//   "nBatchSize": 64,
+//   "nHeads": 6,
+//   "name": "seed 2",
+//   "seed": 2,
+//   "useAlphaParams": true,
+//   "useResiduals": false,
+//   "startFreezingAtIndex": 6,
+//   "unfreezeEveryNSteps": 1000,
+//   "nIterations": 300,
+// },
+// {
+//   "learningRate": 1e-3,
+//   "nBatchSize": 64,
+//   "nHeads": 6,
+//   "name": "seed 3",
+//   "seed": 3,
+//   "useAlphaParams": true,
+//   "useResiduals": false,
+//   "startFreezingAtIndex": 6,
+//   "unfreezeEveryNSteps": 1000,
+//   "nIterations": 300,
+// }]
+
+const cfgs: Partial<ExperimentConfig>[] = [{
+  "name": "test 1",
+  "seed": 3,
   "useAlphaParams": true,
   "useResiduals": false,
-  "startFreezingAtIndex": 3,
-  "unfreezeEveryNSteps": 1000,
-  "nIterations": 300,
+  "nIterations": 100,
 },
 {
-  "learningRate": 1e-3,
-  "nBatchSize": 64,
-  "nHeads": 3,
-  "name": "with_residuals",
-  "seed": 42,
-  "useAlphaParams": false,
-  "useResiduals": true,
-  "startFreezingAtIndex": 3,
-  "unfreezeEveryNSteps": 1000,
-  "nIterations": 300,
-},
-{
-  "learningRate": 1e-3,
-  "nBatchSize": 64,
-  "nHeads": 3,
-  "name": "no_residuals",
-  "seed": 42,
-  "useAlphaParams": false,
+  "name": "test 2",
+  "seed": 4,
+  "useAlphaParams": true,
   "useResiduals": false,
-  "startFreezingAtIndex": 3,
-  "unfreezeEveryNSteps": 1000,
-  "nIterations": 300,
+  "nIterations": 100,
 }]
 
-launchExperimentsAndPlot("exp_1", cfgs);
+// TODO(@aliciafmachado): we should dump the metrics and configs somewhere with the identifier.
+// TODO(@aliciafmachado): we can perhaps add an additional identifier twith a timestamp so that the name is unique.
+// TODO(@aliciafmachado): we need to check the distribution of next tokens.
+// TODO(@aliciafmachado): we need to plot accuracy.
+
+launchExperimentsAndPlot("test", cfgs);
