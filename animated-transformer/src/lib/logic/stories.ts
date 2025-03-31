@@ -42,31 +42,31 @@ export type UnifyFailure =
   | { kind: 'UnifyFailure:relNameClash'; relName1: string; relName2: string }
   | { kind: 'UnifyFailure:relNameMissingFromStory'; relName: string }
   | {
-      kind: 'UnifyFailure:relNameStoryArityMismatch';
-      relName: string;
-      storyArity: number;
-      instanceArity: number;
-    }
+    kind: 'UnifyFailure:relNameStoryArityMismatch';
+    relName: string;
+    storyArity: number;
+    instanceArity: number;
+  }
   // A given relation is not consistent with the story
   | {
-      kind: 'UnifyFailure:argStoryTypeClash';
-      argumentNumber: number;
-      storyVarTypes: string;
-      argType: string;
-    }
+    kind: 'UnifyFailure:argStoryTypeClash';
+    argumentNumber: number;
+    storyVarTypes: string;
+    argType: string;
+  }
   // Or relations might have an argument with a type that does not match.
   | {
-      kind: 'UnifyFailure:relRelTypeClashArg';
-      argumentNumber: number;
-      arg1Types: string[];
-      arg2Types: string[];
-    }
+    kind: 'UnifyFailure:relRelTypeClashArg';
+    argumentNumber: number;
+    arg1Types: string[];
+    arg2Types: string[];
+  }
   | {
-      kind: 'UnifyFailure:argRelationTypeClash';
-      argumentNumber: number;
-      relationVarTypes: string[];
-      argTypes: string[];
-    };
+    kind: 'UnifyFailure:argRelationTypeClash';
+    argumentNumber: number;
+    relationVarTypes: string[];
+    argTypes: string[];
+  };
 
 export type RelationToAdd<TypeNames, VarNames, RelNames> = {
   newRel: Relation<TypeNames, VarNames, RelNames>;
@@ -212,7 +212,7 @@ export class Story<TypeName extends string, VarName extends string, RelNames ext
     if (r1.args.length !== r2.args.length) {
       throw new Error(
         `match: relation arguments don't have the same number of parameters` +
-          ` (${r1.relName}/${r1.args.length} vs ${r2.relName}/${r2.args.length})`
+        ` (${r1.relName}/${r1.args.length} vs ${r2.relName}/${r2.args.length})`
       );
     }
     const unify1Failure = this.unifyRelationWithContext(r1, unifyState);

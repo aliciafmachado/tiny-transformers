@@ -22,7 +22,7 @@ import {
 } from './tiny_worlds';
 
 describe('tiny_worlds', () => {
-  beforeEach(() => {});
+  beforeEach(() => { });
 
   it('test_bayesianV1TinyWorldTaskConfig', () => {
     const initConfig = { ...bayesianV1TinyWorldTaskConfig };
@@ -86,6 +86,16 @@ describe('tiny_worlds', () => {
     expect(example2.output.join('')).toEqual(
       'elephant, jumps _b, runsAway _a, is _c:flower|rock|tree, '
     );
+  });
+
+  it('sanity check on next token probabilities', () => {
+    const initConfig: TinyWorldTaskConfig = structuredClone(defaultTinyWorldTaskConfig);
+    initConfig.maxOutputLen = 20;
+    initConfig.genStateConfig.seed = 42;
+    const tinyWorld = new TinyWorldTask(initConfig);
+
+    const [example] = tinyWorld.exampleIter.takeOutN(1);
+    expect((tinyWorld.getNextTokenProbabilities(example.input).values().toArray().reduce((sum, cur) => sum += cur, 0))).toBeCloseTo(1, 1e-5);
   });
 
   // Special case that causes "runsAway _a" to be generated more than once.

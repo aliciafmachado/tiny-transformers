@@ -24,7 +24,7 @@ import {
   SomeBasicLmTask,
 } from './util';
 import { FreshNames } from '../names/simple_fresh_names';
-import { Story, initStory, sampleNextRel } from '../logic/stories';
+import { Story, initStory, sampleNextRel, applyRules, nextRelDistrStats } from '../logic/stories';
 import { RandomState, RandomStream, makeRandomStream } from '../random/random';
 import { StateIter } from '../state-iter/state-iter';
 import { parseRule, Rule } from '../logic/rules';
@@ -192,7 +192,6 @@ export class TinyWorldTask implements BasicRandLmTask {
   // e.g. "is: ['']" can currently be added by accident.
   constructor(public config: TinyWorldTaskConfig) {
     this.exampleId = 0;
-
     const typeDef = initTypeDef(this.config.typeHierarchy);
     const allTypes = [...typeDef.decendent.keys()];
     const relationMap = initRelationMap(this.config.relationKinds);
@@ -291,6 +290,20 @@ export class TinyWorldTask implements BasicRandLmTask {
       output: generatedTokens.slice(this.config.maxInputLen),
       // secret: [],
     };
+  }
+
+  getNextTokenProbabilities(input: string[]): Map<string, number> {
+    // Initialize story from input and get next token distribution.
+    const typeDef = initTypeDef(this.config.typeHierarchy);
+    const relationMap = initRelationMap(this.config.relationKinds);
+    let curStory = initStory(typeDef, relationMap);
+    curStory.extendScene(input.join("").split(", ").map((value) => parseRel(value)));
+    const ruleApps = applyRules(this.rules, curStory);
+    const distr = nextRelDistrStats(ruleApps);
+    const onlyProbabilities = new Map<string, number>(
+      Array.from(distr.entries()).map(([key, value]) => [key, value.prob])
+    );
+    return onlyProbabilities;
   }
 
   *examplesGen(rndState: RandomState): Iterator<Example> {
