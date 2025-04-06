@@ -27,12 +27,14 @@ import * as Plot from '@observablehq/plot';
 import sharp from "sharp";
 import fs from "fs";
 import { JSDOM } from "jsdom";
+import { GTensor } from "../gtensor/gtensor";
 
 
 import {
   TransformerComputation,
   lastTokenLogits,
   allPastTokensCrossEntropyLossWithIntegerLabels,
+  allPastTokensLogits,
 } from '../transformer/common_transformer';
 import {
   TransformerParamLayerSpec,
@@ -58,16 +60,24 @@ import { isNumber } from 'underscore';
 const tfjsBackendName = tf.getBackend();
 console.log('tfjs backend:', tfjsBackendName);
 
-const printEveryNBatches = 10;
+const printEveryNBatches = 50;
 
 interface Metric {
   loss: number;
   step: number;
+  accuracy?: number;
+  klDivergence?: number;
   alphaFirstParams?: number[];
   alphaSecondParams?: number[];
 }
 
-const availableMetrics: string[] = ["loss", "alphaFirstParams", "alphaSecondParams"];
+interface EvalMetric {
+  step: number;
+  accuracy: number;
+}
+
+const availableMetrics: string[] = ["loss", "accuracy", "klDivergence", "alphaFirstParams", "alphaSecondParams"];
+const availableEvalMetrics: string[] = ["accuracy"];
 
 // TODO: this should be a class with default values. 
 interface ExperimentConfig {
@@ -161,12 +171,78 @@ function* batchGenerator(
   batchNum: number,
   batchSize: number
 ): Iterable<Batch> {
-  for (let batchId = 0; batchId < batchNum; batchId += 1) {
+  for (let batchId = 1; batchId <= batchNum; batchId += 1) {
     let batchOriginal = task.exampleIter.takeOutN(batchSize);
     let inputs = batchOriginal.map((example) => example.input);
     let outputs = batchOriginal.map((example) => example.output);
     yield { batchId, inputs, outputs };
   }
+}
+
+function computeModelAndPrepareOutput(
+  model: {
+    config: {
+      spec: TransformerParamSpec;
+      tokenRep: BasicTaskTokenRep;
+    }
+    params: TransformerParams;
+  },
+  randomStream: RandomStream,
+  batchInput: string[][],
+  batchOutput: string[][],
+): { "target": GTensor<"batch" | "pos">, "computation": TransformerComputation } {
+  const maxInputLength = batchInput.reduce(
+    (max, curInput) => (max >= curInput.length ? max : curInput.length),
+    0,
+  );
+  const gtensorInputs = strSeqPrepFn(model, batchInput, { maxInputLength });
+  const computation: TransformerComputation = computeTransformer(
+    model,
+    gtensorInputs,
+    randomStream
+  );
+  const targetTokens = expectedOutputSeqPrepFn(model, batchInput, batchOutput);
+  return { "target": targetTokens, "computation": computation };
+}
+
+
+function computeAccuracy(
+  model: {
+    config: {
+      spec: TransformerParamSpec;
+      tokenRep: BasicTaskTokenRep;
+    }
+    params: TransformerParams;
+  },
+  randomStream: RandomStream,
+  // batchId: number,
+  batchInput: string[][],
+  batchOutput: string[][],
+  // thisExperimentMetrics: Metric[],
+) {
+  // Disable dropout.
+  const dropout = model.config.spec.computeSpec.dropoutRate;
+  model.config.spec.computeSpec.dropoutRate = 0;
+  for (const layer of model.config.spec.layers) {
+    layer.computeSpec.dropoutRate = 0;
+  }
+  // Regular computation.
+  const targetTokensAndComputation = computeModelAndPrepareOutput(model, randomStream, batchInput, batchOutput);
+  const expectedOutputSeq = new GTensor(
+    tf.tensor(batchOutput.map((outputToken) => model.config.tokenRep.tokenToIdx[outputToken[0]]), undefined, 'int32'), ["batch"])
+  const classifiedToken = lastTokenLogits(model, targetTokensAndComputation.computation).argMax("tokenId");
+  const accuracy = classifiedToken.pointwiseEqual(
+    expectedOutputSeq).sumOverDims(["batch"]).tensor.div(tf.scalar(expectedOutputSeq.dim.batch.size));
+  // thisExperimentMetrics[-1].accuracy =  accuracy.asScalar().arraySync();
+
+  // Add dropout back.
+  // Note: we are supposing that the dropout is the same everywhere.
+  model.config.spec.computeSpec.dropoutRate = dropout;
+  for (const layer of model.config.spec.layers) {
+    layer.computeSpec.dropoutRate = dropout;
+  }
+
+  return accuracy.asScalar().arraySync();
 }
 
 function computeLoss(
@@ -183,18 +259,9 @@ function computeLoss(
   batchOutput: string[][],
   thisExperimentMetrics: Metric[],
 ): tf.Scalar {
-  const maxInputLength = batchInput.reduce(
-    (max, curInput) => (max >= curInput.length ? max : curInput.length),
-    0,
-  );
-  const gtensorInputs = strSeqPrepFn(model, batchInput, { maxInputLength });
-  const computation: TransformerComputation = computeTransformer(
-    model,
-    gtensorInputs,
-    randomStream
-  );
-  const targetTokens = expectedOutputSeqPrepFn(model, batchInput, batchOutput);
-  const entropyLoss: tf.Scalar = allPastTokensCrossEntropyLossWithIntegerLabels(model, computation, targetTokens);
+  const targetTokensAndComputation = computeModelAndPrepareOutput(model, randomStream, batchInput, batchOutput);
+  const entropyLoss: tf.Scalar = allPastTokensCrossEntropyLossWithIntegerLabels(
+    model, targetTokensAndComputation.computation, targetTokensAndComputation.target);
   let metric: Metric = { "loss": entropyLoss.arraySync(), "step": batchId };
 
   const alphaFirsts = model.params.layers.map((g) => g.alphaParams?.alphaFirst.tensor.asScalar().arraySync());
@@ -206,7 +273,7 @@ function computeLoss(
     metric.alphaSecondParams = alphaSeconds as number[];
   }
 
-  if (batchId % printEveryNBatches === 0) {
+  if ((batchId) % printEveryNBatches === 0) {
     console.log(
       `batch: ${batchId} `.padEnd(15) +
       ('entropyLoss: ' + entropyLoss.arraySync().toFixed(8)).padEnd(25)
@@ -222,6 +289,8 @@ function computeLoss(
       )
     }
   }
+
+  metric.accuracy = computeAccuracy(model, randomStream, batchInput, batchOutput);
   // Store loss for plotting.
   thisExperimentMetrics.push(metric);
   return entropyLoss;
@@ -283,9 +352,18 @@ function run(experimentConfig: ExperimentConfig) {
         false,
         paramsList,
       );
+
+      // if ((batchId) % printEveryNBatches === 0) {
+      //   // Validation.
+      //   let batchOriginal = trainTask.exampleIter.takeOutN(batchSize);
+      //   let inputs = batchOriginal.map((example) => example.input);
+      //   let outputs = batchOriginal.map((example) => example.output);
+
+      // }
+
       batchId += 1;
 
-      if (batchId % experimentConfig.unfreezeEveryNSteps == 0 && unfreezeId < decoderParams.layers.length) {
+      if ((batchId) % experimentConfig.unfreezeEveryNSteps == 0 && unfreezeId < decoderParams.layers.length) {
         unfreezeAlphaParamsAt(decoderParams, unfreezeId);
         paramsList = listifyVarParams(decoderParams).map((g) => g.variable);
         unfreezeId += 1;
@@ -366,7 +444,8 @@ function run(experimentConfig: ExperimentConfig) {
   return thisExperimentMetrics;
 } // run
 
-function printMetric(setOfExpsName: string, experimentMetrics: [string, Metric[]][], metricName: keyof Metric, layerIndex: number = 0) {
+function printMetric(setOfExpsName: string, experimentMetrics: [string, Metric[]][],
+  metricName: keyof Metric, layerIndex: number = 0) {
   // Will print a new image called {exp_name}_{metric_name}.
   function ifArrayExtractIndex(value: number | Array<number>, index: number): number {
     if (isNumber(value)) {
@@ -427,7 +506,8 @@ function printMetric(setOfExpsName: string, experimentMetrics: [string, Metric[]
   async function callSharp(): Promise<void> {
     try {
       const buffer: Buffer = await sharp(Buffer.from(outerHTMLWithBackground, "utf-8")).png().toBuffer();
-      const nameToSave = setOfExpsName + "_" + metricName + name_suffix + ".png";
+      fs.mkdirSync(setOfExpsName, { recursive: true });
+      const nameToSave = setOfExpsName + "/" + metricName + name_suffix + ".png";
       fs.writeFileSync(nameToSave, buffer);
       console.log("PNG image saved as " + nameToSave);
     } catch (error) {
@@ -450,7 +530,7 @@ function launchExperimentsAndPlot(setOfExpsName: string, partialConfigs: Partial
 
   // Plot metrics.
   for (const metric of availableMetrics) {
-    if (metric == "loss")
+    if (metric == "loss" || metric == "accuracy")
       printMetric(setOfExpsName, experimentMetrics, metric as keyof Metric);
     else {
       for (let i = 0; i < configs[0].nHeads; i++) {
@@ -570,23 +650,31 @@ function launchExperimentsAndPlot(setOfExpsName: string, partialConfigs: Partial
 // }]
 
 const cfgs: Partial<ExperimentConfig>[] = [{
-  "name": "test 1",
-  "seed": 3,
+  "name": "w alpha",
+  // 0 becomes negative
+  "seed": 42,
   "useAlphaParams": true,
   "useResiduals": false,
-  "nIterations": 100,
+  "nIterations": 5,
 },
 {
-  "name": "test 2",
-  "seed": 4,
-  "useAlphaParams": true,
+  "name": "w residuals",
+  "seed": 42,
+  "useAlphaParams": false,
+  "useResiduals": true,
+  "nIterations": 5,
+},
+{
+  "name": "no residuals",
+  "seed": 42,
+  "useAlphaParams": false,
   "useResiduals": false,
-  "nIterations": 100,
+  "nIterations": 5,
 }]
 
 // TODO(@aliciafmachado): we should dump the metrics and configs somewhere with the identifier.
 // TODO(@aliciafmachado): we can perhaps add an additional identifier twith a timestamp so that the name is unique.
-// TODO(@aliciafmachado): we need to check the distribution of next tokens.
-// TODO(@aliciafmachado): we need to plot accuracy.
+// TODO(@aliciafmachado): we need to plot accuracy every K steps. And to compute what's the best accuracy and loss.
+// TODO(@aliciafmachado): we want to run a few experiments and compile it in a doc.
 
 launchExperimentsAndPlot("test", cfgs);
