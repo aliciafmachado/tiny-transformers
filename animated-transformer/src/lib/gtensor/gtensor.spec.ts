@@ -976,4 +976,28 @@ describe('gtensor', () => {
       [0, 0, 0],
     ]);
   });
+
+  it('kldivergence', () => {
+    const trueProbs = new gtensor.GTensor(
+      tf.tensor([
+        [0.10, 0.40, 0.50],
+        [0, 0.8, 0.2]
+      ]),
+      ['batch', 'prob'],
+    );
+
+    const modelProbs = new gtensor.GTensor(
+      tf.tensor(
+        [
+          [0.80, 0.15, 0.05],
+          [0.1, 0.7, 0.2],
+        ],
+      ),
+      ['batch', 'prob'],
+    );
+    const klDivergence = trueProbs.KlDivergence(modelProbs, 'prob');
+    expect(klDivergence.dimNames).toEqual(['batch']);
+    tf.test_util.expectArraysClose(klDivergence.tensor.arraySync(),
+      [1.336, 0.106], 0.001);
+  })
 });

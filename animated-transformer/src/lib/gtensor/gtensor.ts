@@ -622,6 +622,16 @@ export class GTensor<G extends DName> {
     return this.pointwiseAdd(g2._tfScalarMul(tf.scalar(-1)));
   }
 
+  public KlDivergence<G2 extends DName, D extends G>(g2: GTensor<G2>, dim: D): GTensor<Exclude<G | G2, D>> {
+    // this Gtensor should be ground truth, and the passed g2 should be the predictions.
+    // Compute KL Divergence on the dimension D:
+    const naiveKlDivergence = this.pointwiseMul(this.pointwiseDiv(g2).log());
+    // In this implementation we filter out 0s in the true probability to avoid NaNs:
+    return new GTensor(
+      naiveKlDivergence.tensor.where(tf.notEqual(this.tensor, tf.zeros(this.tensor.shape)), tf.zeros(this.tensor.shape)),
+      naiveKlDivergence.dimNames).sumOverDims([dim]);
+  }
+
   public softmax<D extends G>(n: D): GTensor<G> {
     let newTensor = this.tensor;
     const newDimNames = [...this.dimNames];
@@ -703,6 +713,14 @@ export class GTensor<G extends DName> {
     const dimIndexes = dims.map((d) => this.dim[d].index);
     return new GTensor(
       tf.prod(this.tensor, dimIndexes),
+      this.dimNames.filter((d) => !dims.includes(d as D)) as Exclude<G, D>[],
+    );
+  }
+
+  public divOverDims<D extends G>(dims: D[]): GTensor<Exclude<G, D>> {
+    const dimIndexes = dims.map((d) => this.dim[d].index);
+    return new GTensor(
+      tf.div(this.tensor, dimIndexes),
       this.dimNames.filter((d) => !dims.includes(d as D)) as Exclude<G, D>[],
     );
   }
