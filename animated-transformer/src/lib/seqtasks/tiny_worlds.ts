@@ -24,7 +24,7 @@ import {
   SomeBasicLmTask,
 } from './util';
 import { FreshNames } from '../names/simple_fresh_names';
-import { Story, initStory, sampleNextRel, applyRules, nextRelDistrStats } from '../logic/stories';
+import { Story, initStory, sampleNextRel, applyRules, nextRelDistrStats, RelRuleApps } from '../logic/stories';
 import { RandomState, RandomStream, makeRandomStream } from '../random/random';
 import { StateIter } from '../state-iter/state-iter';
 import { parseRule, Rule } from '../logic/rules';
@@ -190,7 +190,9 @@ export class TinyWorldTask implements BasicRandLmTask {
 
   // TODO: validate the relations don't break the types...
   // e.g. "is: ['']" can currently be added by accident.
-  constructor(public config: TinyWorldTaskConfig) {
+  constructor(public config: TinyWorldTaskConfig,
+    // getProbabilities: boolean = false
+  ) {
     this.exampleId = 0;
     const typeDef = initTypeDef(this.config.typeHierarchy);
     const allTypes = [...typeDef.decendent.keys()];
@@ -222,6 +224,7 @@ export class TinyWorldTask implements BasicRandLmTask {
     this.exampleIter = new StateIter(
       structuredClone(config.genStateConfig),
       // (x) => x.copy(),
+      // getProbabilities
       (r) => this.examplesGen(r)
     );
   }
@@ -229,7 +232,7 @@ export class TinyWorldTask implements BasicRandLmTask {
   nextRelTokens(
     prevStory: Story<TypeName, VarName, RelName>,
     curStory: Story<TypeName, VarName, RelName>,
-    rel: Relation<TypeName, VarName, RelName>
+    rel: Relation<TypeName, VarName, RelName>,
   ) {
     const args = rel.args.flatMap((r, i) => {
       const prevStoryType = prevStory.varTypes.get(r.varName) || new Set();
@@ -242,9 +245,6 @@ export class TinyWorldTask implements BasicRandLmTask {
         (!prevStoryType &&
           typesetEquality(curStory.types, curStory.relations.get(rel.relName)![i], r.varTypes))
       ) {
-        // console.log(`${r.varName} (in story): ${[...curStory.varTypes.get(r.varName)!]}`);
-        // console.log(`${r.varName} (in prev story): ${[...prevStoryType]}`);
-        // console.log(`${r.varName} (in rel): ${[...curStory.relations.get(rel.relName)![i]]}`);
         return [spaceSepToken, r.varName];
       } else {
         const typeTokens = addBetweenEvery([...r.varTypes].sort(), typeOrToken);
@@ -265,25 +265,37 @@ export class TinyWorldTask implements BasicRandLmTask {
     }
   }
 
+  // getDistributions: boolean = false
   genRandExample(rndState: RandomState): Example {
     const rns = new RandomStream(rndState);
     const generatedTokens: string[] = [];
     const maxTokens = this.config.maxInputLen + this.config.maxOutputLen;
     let curStory = this.initStory;
+    // let maybeNextStory: {
+    //   story: Story<string, VarName, string>;
+    //   rel: Relation<string, VarName, string>;
+    //   distr: Map<string, number>;
+    // } | null = null;
     while (generatedTokens.length < maxTokens) {
       // console.log('genRandExample: rns.state.curSeedVal', rns.state.curSeedVal);
-      const maybeNextStory = sampleNextRel(rns, curStory, this.rules);
+      let maybeNextStory = sampleNextRel(rns, curStory, this.rules);
       if (maybeNextStory) {
         const extraTokens = this.nextRelTokens(curStory, maybeNextStory.story, maybeNextStory.rel);
-        // console.log('extraTokens', extraTokens.join(' '));
         this.addNextRelTokens(maxTokens, generatedTokens, extraTokens);
         curStory = maybeNextStory.story;
-        // console.log('scene', curStory.relSeq);
-        // console.log('varTypes', curStory.varTypes);
       } else {
         break;
       }
     }
+
+    // if (getDistributions)
+    //   return {
+    //     id: this.exampleId++,
+    //     input: generatedTokens.slice(0, this.config.maxInputLen),
+    //     output: generatedTokens.slice(this.config.maxInputLen),
+    //     outputDistribution: maybeNextStory?.distr,
+    //     // secret: [],
+    //   }
     return {
       id: this.exampleId++,
       input: generatedTokens.slice(0, this.config.maxInputLen),
@@ -292,22 +304,53 @@ export class TinyWorldTask implements BasicRandLmTask {
     };
   }
 
+  // This function should compute the last token for this story.
+  lastTokenOfStory(
+    relRuleApps: RelRuleApps<string, `_${string}` | `?${string}`, string>,
+    curStory: Story<string, VarName, string>):
+    string | null {
+    if (!relRuleApps) {
+      return null;
+    }
+    const ruleApp = relRuleApps.ruleApps[0];
+    const extraTokens = this.nextRelTokens(curStory, ruleApp.story, ruleApp.newRel);
+    return extraTokens.at(-1) as string;
+  }
+
   getNextTokenProbabilities(input: string[]): Map<string, number> {
     // Initialize story from input and get next token distribution.
+    // Rebuild the story from the input.
     const typeDef = initTypeDef(this.config.typeHierarchy);
     const relationMap = initRelationMap(this.config.relationKinds);
     let curStory = initStory(typeDef, relationMap);
     curStory.extendScene(input.join("").split(", ").map((value) => parseRel(value)));
     const ruleApps = applyRules(this.rules, curStory);
+
+    // Obtain the distribution.
     const distr = nextRelDistrStats(ruleApps);
-    const onlyProbabilities = new Map<string, number>(
-      Array.from(distr.entries()).map(([key, value]) => [key, value.prob])
-    );
-    return onlyProbabilities;
+
+    // Iterate over distribution to get possible occurences. 
+    const lastTokenToProbability =
+      Array.from(distr.entries()).map(
+        ([key, value]) => {
+          return {
+            lastToken: this.lastTokenOfStory(value, curStory), probability: value.prob
+          }
+        }).filter(
+          predicate => predicate.lastToken !== null) as { "lastToken": string, "probability": number }[];
+
+    // Reduce the output to sum probabilities for the same last tokens before creating a map.
+    return lastTokenToProbability.reduce((acc, value) => {
+      const currentProbSum = acc.get(value.lastToken) || 0;
+      acc.set(value.lastToken, currentProbSum + value.probability);
+      return acc;
+    }, new Map<string, number>())
   }
 
+  // getProbabilities: boolean
   *examplesGen(rndState: RandomState): Iterator<Example> {
     while (true) {
+      // getProbabilities
       yield this.genRandExample(rndState);
     }
   }
