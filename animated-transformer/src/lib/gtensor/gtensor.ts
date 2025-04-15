@@ -622,7 +622,7 @@ export class GTensor<G extends DName> {
     return this.pointwiseAdd(g2._tfScalarMul(tf.scalar(-1)));
   }
 
-  public KlDivergence<G2 extends DName, D extends G>(g2: GTensor<G2>, dim: D): GTensor<Exclude<G | G2, D>> {
+  public klDivergence<G2 extends DName, D extends G>(g2: GTensor<G2>, dim: D): GTensor<Exclude<G | G2, D>> {
     // this Gtensor should be ground truth, and the passed g2 should be the predictions.
     // Compute KL Divergence on the dimension D:
     const naiveKlDivergence = this.pointwiseMul(this.pointwiseDiv(g2).log());
@@ -658,6 +658,10 @@ export class GTensor<G extends DName> {
 
   public exp(): GTensor<G> {
     return new GTensor(tf.exp(this.tensor), this.dimNames);
+  }
+
+  public mean(): GTensor<never> {
+    return new GTensor(tf.mean(this.tensor), []);
   }
 
   public logSumExp<D extends G>(dims: D[]): GTensor<Exclude<G, D>> {

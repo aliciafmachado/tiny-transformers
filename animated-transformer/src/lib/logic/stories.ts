@@ -566,6 +566,7 @@ export function sampleNextRel<
 ): {
   story: Story<TypeNames, VarNames, RelNames>;
   rel: Relation<TypeNames, VarNames, RelNames>;
+  distr: Map<string, RelRuleApps<TypeNames, VarNames, RelNames>>;
 } | null {
   const ruleApps = applyRules(rules, curStory);
   const distr = nextRelDistrStats(ruleApps);
@@ -593,5 +594,5 @@ export function sampleNextRel<
     return null;
   }
   const ruleApp = relRuleApps.ruleApps[0];
-  return { story: ruleApp.story, rel: ruleApp.newRel };
+  return { story: ruleApp.story, rel: ruleApp.newRel, distr: distr };
 }

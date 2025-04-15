@@ -995,7 +995,7 @@ describe('gtensor', () => {
       ),
       ['batch', 'prob'],
     );
-    const klDivergence = trueProbs.KlDivergence(modelProbs, 'prob');
+    const klDivergence = trueProbs.klDivergence(modelProbs, 'prob');
     expect(klDivergence.dimNames).toEqual(['batch']);
     tf.test_util.expectArraysClose(klDivergence.tensor.arraySync(),
       [1.336, 0.106], 0.001);

@@ -34,7 +34,6 @@ import {
   TransformerComputation,
   lastTokenLogits,
   allPastTokensCrossEntropyLossWithIntegerLabels,
-  allPastTokensLogits,
 } from '../transformer/common_transformer';
 import {
   TransformerParamLayerSpec,
@@ -106,7 +105,7 @@ function defaultConfigs(config: Partial<ExperimentConfig> = {}): ExperimentConfi
     unfreezeEveryNSteps: config.unfreezeEveryNSteps ?? MAXNUMBER,
     nHeads: config.nHeads ?? 3,
     startFreezingAtIndex: config.startFreezingAtIndex ?? MAXNUMBER,
-    seed: config.seed ?? 0,
+    seed: config.seed ?? 42,
   };
 }
 
@@ -164,6 +163,7 @@ type Batch = {
   batchId: number;
   inputs: string[][];
   outputs: string[][];
+  outputDistribution: Map<string, number>[][];
 };
 
 function* batchGenerator(
@@ -175,7 +175,8 @@ function* batchGenerator(
     let batchOriginal = task.exampleIter.takeOutN(batchSize);
     let inputs = batchOriginal.map((example) => example.input);
     let outputs = batchOriginal.map((example) => example.output);
-    yield { batchId, inputs, outputs };
+    let outputDistribution = batchOriginal.map((example) => example?.outputDistribution || []);
+    yield { batchId, inputs, outputs, outputDistribution };
   }
 }
 
@@ -215,12 +216,12 @@ function computeAccuracy(
     params: TransformerParams;
   },
   randomStream: RandomStream,
-  // batchId: number,
   batchInput: string[][],
   batchOutput: string[][],
+  outputDistribution: Map<string, number>[][],
   // thisExperimentMetrics: Metric[],
-) {
-  // Disable dropout.
+): [number, number] {
+  // Disable dropout for accuracy and klDivergence computation.
   const dropout = model.config.spec.computeSpec.dropoutRate;
   model.config.spec.computeSpec.dropoutRate = 0;
   for (const layer of model.config.spec.layers) {
@@ -230,10 +231,51 @@ function computeAccuracy(
   const targetTokensAndComputation = computeModelAndPrepareOutput(model, randomStream, batchInput, batchOutput);
   const expectedOutputSeq = new GTensor(
     tf.tensor(batchOutput.map((outputToken) => model.config.tokenRep.tokenToIdx[outputToken[0]]), undefined, 'int32'), ["batch"])
-  const classifiedToken = lastTokenLogits(model, targetTokensAndComputation.computation).argMax("tokenId");
-  const accuracy = classifiedToken.pointwiseEqual(
+  const tokenLogits = lastTokenLogits(model, targetTokensAndComputation.computation);
+  const accuracy = tokenLogits.argMax("tokenId").pointwiseEqual(
     expectedOutputSeq).sumOverDims(["batch"]).tensor.div(tf.scalar(expectedOutputSeq.dim.batch.size));
-  // thisExperimentMetrics[-1].accuracy =  accuracy.asScalar().arraySync();
+
+  // Compute kl divergence.
+  // Extract probabilities for kl divergence computation:
+  const modelProbabilitiesIndexes: number[][] = [];
+  const trueProbabilities: number[][] = [];
+
+  // We need to extract the model probabilities for the tokens that are possible.
+  // We need to first extract the distribution for the output token:
+  const firstOutputTokenDistributions = outputDistribution.map((v, i) => {
+    return v[batchInput[i].length]
+  });
+
+  const maxNumberOfOptions = firstOutputTokenDistributions.map((v) => v.keys().toArray().length).reduce((acc, v) => Math.max(acc, v) || 0);
+  for (const distribution of firstOutputTokenDistributions) {
+    let probabilities = [];
+    let trueProbs = [];
+    for (const key of distribution.keys()) {
+      probabilities.push(model.config.tokenRep.tokenToIdx[key]);
+      trueProbs.push(distribution.get(key) as number);
+    }
+    // Pad probabilities and trueProbs:
+    probabilities = probabilities.concat(Array(maxNumberOfOptions - probabilities.length).fill(
+      model.config.tokenRep.tokenToIdx[model.config.tokenRep.maskToken]));
+    trueProbs = trueProbs.concat(Array(maxNumberOfOptions - trueProbs.length).fill(0));
+
+    modelProbabilitiesIndexes.push(probabilities);
+    trueProbabilities.push(trueProbs);
+  }
+
+  const modelProbabilitiesIndexesGTensor = new GTensor(
+    tf.tensor(modelProbabilitiesIndexes,
+      [modelProbabilitiesIndexes.length, maxNumberOfOptions],
+      'int32'),
+    ["batch", "tokenId"],
+  )
+  const trueProbabilitiesGTensor = new GTensor(
+    tf.tensor(trueProbabilities),
+    ["batch", "tokenId"]
+  )
+
+  const probabilitiesForPossibleTokens = tokenLogits.softmax('tokenId').gather(modelProbabilitiesIndexesGTensor, "tokenId", ["batch"]);
+  const klDivergence = trueProbabilitiesGTensor.klDivergence(probabilitiesForPossibleTokens, 'tokenId');
 
   // Add dropout back.
   // Note: we are supposing that the dropout is the same everywhere.
@@ -241,8 +283,7 @@ function computeAccuracy(
   for (const layer of model.config.spec.layers) {
     layer.computeSpec.dropoutRate = dropout;
   }
-
-  return accuracy.asScalar().arraySync();
+  return [accuracy.asScalar().arraySync(), klDivergence.mean().tensor.asScalar().arraySync()];
 }
 
 function computeLoss(
@@ -257,6 +298,7 @@ function computeLoss(
   batchId: number,
   batchInput: string[][],
   batchOutput: string[][],
+  outputDistribution: Map<string, number>[][],
   thisExperimentMetrics: Metric[],
 ): tf.Scalar {
   const targetTokensAndComputation = computeModelAndPrepareOutput(model, randomStream, batchInput, batchOutput);
@@ -290,8 +332,10 @@ function computeLoss(
     }
   }
 
-  metric.accuracy = computeAccuracy(model, randomStream, batchInput, batchOutput);
+  const [accuracy, klDivergence] = computeAccuracy(model, randomStream, batchInput, batchOutput, outputDistribution);
   // Store loss for plotting.
+  metric.accuracy = accuracy;
+  metric.klDivergence = klDivergence;
   thisExperimentMetrics.push(metric);
   return entropyLoss;
 }
@@ -320,7 +364,7 @@ function run(experimentConfig: ExperimentConfig) {
   let thisExperimentMetrics: Metric[] = [];
   // define task
   const trainTaskConfig = getTaskConfig();
-  const trainTask = new TinyWorldTask(trainTaskConfig);
+  const trainTask = new TinyWorldTask(trainTaskConfig, true);
 
   // define vocab & decoder
   const Config = initTransformerConfig(trainTask.baseVocab, experimentConfig.nHeads, experimentConfig.useAlphaParams, experimentConfig.useResiduals,
@@ -346,20 +390,12 @@ function run(experimentConfig: ExperimentConfig) {
 
     let optimizer = tf.train.adam(experimentConfig.learningRate);
     for (let batch of batchGenerator(trainTask, batchNum, batchSize)) {
-      let { batchId, inputs, outputs } = batch;
+      let { batchId, inputs, outputs, outputDistribution } = batch;
       optimizer.minimize(
-        () => computeLoss(model, randomStream, batchId, inputs, outputs, thisExperimentMetrics),
+        () => computeLoss(model, randomStream, batchId, inputs, outputs, outputDistribution, thisExperimentMetrics),
         false,
         paramsList,
       );
-
-      // if ((batchId) % printEveryNBatches === 0) {
-      //   // Validation.
-      //   let batchOriginal = trainTask.exampleIter.takeOutN(batchSize);
-      //   let inputs = batchOriginal.map((example) => example.input);
-      //   let outputs = batchOriginal.map((example) => example.output);
-
-      // }
 
       batchId += 1;
 
@@ -376,7 +412,7 @@ function run(experimentConfig: ExperimentConfig) {
     // infer
     const inferSteps = 5;
     const inferTaskConfig = { ...getTaskConfig(), maxOutputLen: inferSteps };
-    const inferTask = new TinyWorldTask(inferTaskConfig);
+    const inferTask = new TinyWorldTask(inferTaskConfig, true);
 
     const batchOriginal = inferTask.exampleIter.takeOutN(1);
 
@@ -425,19 +461,24 @@ function run(experimentConfig: ExperimentConfig) {
 
     console.log('Inference Step:', inferStep);
     console.log('Context:', batchInput[0].join(''));
-    // console.log('Target Output:', batchOutput[0].join(''));
     console.log('Target next token:', batchOutput[0][0]);
     console.log('Prediction:');
-    console.log('   ', 'token'.padEnd(10), ' ', 'prob'.padEnd(10), ' ');
-
+    console.log('   ', 'token'.padEnd(10), ' ', 'prob'.padEnd(10), ' ', 'true prob', ' ');
     // Print the sorted table, marking the target from the batchOutput.
     for (const token of possibleTokenTable) {
-      // let tokenId = 0; tokenId < tokenRep.tokens.length; tokenId += 1
+      let trueProb = ''.padEnd(10)
       let mark = '';
+      if (batchOriginal[0].outputDistribution) {
+        const firstOutputTokenDistributions = batchOriginal[0].outputDistribution[batchOriginal[0].input.length];
+        let maybeTrueProb = firstOutputTokenDistributions.get(token.str);
+        if (maybeTrueProb !== undefined) {
+          trueProb = maybeTrueProb.toFixed(8);
+        }
+      }
       if (token.tokenId == singleNextTokenIdxArrayData) {
         mark = ' <- Target';
       }
-      console.log('   ', token.str.padEnd(10), ' ', token.prob.toFixed(8), ' ', mark);
+      console.log('   ', token.str.padEnd(10), ' ', token.prob.toFixed(8), ' ', trueProb, ' ', mark);
     }
   } // infer
 
@@ -506,7 +547,6 @@ function printMetric(setOfExpsName: string, experimentMetrics: [string, Metric[]
   async function callSharp(): Promise<void> {
     try {
       const buffer: Buffer = await sharp(Buffer.from(outerHTMLWithBackground, "utf-8")).png().toBuffer();
-      fs.mkdirSync(setOfExpsName, { recursive: true });
       const nameToSave = setOfExpsName + "/" + metricName + name_suffix + ".png";
       fs.writeFileSync(nameToSave, buffer);
       console.log("PNG image saved as " + nameToSave);
@@ -518,6 +558,16 @@ function printMetric(setOfExpsName: string, experimentMetrics: [string, Metric[]
   callSharp();
 }
 
+function saveExpToJson(data: ExperimentConfig[] | [string, Metric[]][], filePath: string) {
+  try {
+    const jsonData = JSON.stringify(data, null, 2);
+    fs.writeFileSync(filePath, jsonData, 'utf-8');
+    console.log(`Data saved to ${filePath}`);
+  } catch (error) {
+    console.error('Error saving JSON:', error);
+  }
+}
+
 function launchExperimentsAndPlot(setOfExpsName: string, partialConfigs: Partial<ExperimentConfig>[]) {
   // First set other arguments:
   const configs = partialConfigs.map((value) => defaultConfigs(value));
@@ -525,12 +575,14 @@ function launchExperimentsAndPlot(setOfExpsName: string, partialConfigs: Partial
   console.log("Number of experiments is " + configs.length);
   console.log("Configs are:");
   console.log(configs);
+  console.log("Will save metrics under " + setOfExpsName);
+  fs.mkdirSync(setOfExpsName, { recursive: true });
   let experimentMetrics: [string, Metric[]][] = [];
   configs.map((config) => experimentMetrics.push([config.name, run(config)]));
 
   // Plot metrics.
   for (const metric of availableMetrics) {
-    if (metric == "loss" || metric == "accuracy")
+    if (metric == "loss" || metric == "accuracy" || metric == "klDivergence")
       printMetric(setOfExpsName, experimentMetrics, metric as keyof Metric);
     else {
       for (let i = 0; i < configs[0].nHeads; i++) {
@@ -538,143 +590,38 @@ function launchExperimentsAndPlot(setOfExpsName: string, partialConfigs: Partial
       }
     }
   }
+
+  // Dump hyperparameters and data in json format:
+  saveExpToJson(configs, setOfExpsName + "/configs.json");
+  saveExpToJson(experimentMetrics, setOfExpsName + "/metrics.json");
 }
 
-// const cfgs: ExperimentConfig[] = [{
-//   "learningRate": 1e-3,
-//   "nBatchSize": 64,
-//   "nHeads": 3,
-//   "name": "dynamic_residuals",
-//   "seed": 42,
-//   "useAlphaParams": true,
-//   "useResiduals": false,
-//   "startFreezingAtIndex": 3,
-//   "unfreezeEveryNSteps": 1000,
-//   "nIterations": 300,
-// },
-// {
-//   "learningRate": 1e-3,
-//   "nBatchSize": 64,
-//   "nHeads": 3,
-//   "name": "with_residuals",
-//   "seed": 42,
-//   "useAlphaParams": false,
-//   "useResiduals": true,
-//   "startFreezingAtIndex": 3,
-//   "unfreezeEveryNSteps": 1000,
-//   "nIterations": 300,
-// },
-// {
-//   "learningRate": 1e-3,
-//   "nBatchSize": 64,
-//   "nHeads": 3,
-//   "name": "no_residuals",
-//   "seed": 42,
-//   "useAlphaParams": false,
-//   "useResiduals": false,
-//   "startFreezingAtIndex": 3,
-//   "unfreezeEveryNSteps": 1000,
-//   "nIterations": 300,
-// }]
-// const cfgs: ExperimentConfig[] = [{
-//   "learningRate": 1e-3,
-//   "nBatchSize": 64,
-//   "nHeads": 3,
-//   "name": "seed 1",
-//   "seed": 1,
-//   "useAlphaParams": true,
-//   "useResiduals": false,
-//   "startFreezingAtIndex": 3,
-//   "unfreezeEveryNSteps": 1000,
-//   "nIterations": 300,
-// },
-// {
-//   "learningRate": 1e-3,
-//   "nBatchSize": 64,
-//   "nHeads": 3,
-//   "name": "seed 2",
-//   "seed": 2,
-//   "useAlphaParams": true,
-//   "useResiduals": false,
-//   "startFreezingAtIndex": 3,
-//   "unfreezeEveryNSteps": 1000,
-//   "nIterations": 300,
-// },
-// {
-//   "learningRate": 1e-3,
-//   "nBatchSize": 64,
-//   "nHeads": 3,
-//   "name": "seed 3",
-//   "seed": 3,
-//   "useAlphaParams": true,
-//   "useResiduals": false,
-//   "startFreezingAtIndex": 3,
-//   "unfreezeEveryNSteps": 1000,
-//   "nIterations": 300,
-// }]
-// const cfgs: ExperimentConfig[] = [{
-//   "learningRate": 1e-3,
-//   "nBatchSize": 64,
-//   "nHeads": 6,
-//   "name": "seed 1",
-//   "seed": 1,
-//   "useAlphaParams": true,
-//   "useResiduals": false,
-//   "startFreezingAtIndex": 6,
-//   "unfreezeEveryNSteps": 1000,
-//   "nIterations": 300,
-// },
-// {
-//   "learningRate": 1e-3,
-//   "nBatchSize": 64,
-//   "nHeads": 6,
-//   "name": "seed 2",
-//   "seed": 2,
-//   "useAlphaParams": true,
-//   "useResiduals": false,
-//   "startFreezingAtIndex": 6,
-//   "unfreezeEveryNSteps": 1000,
-//   "nIterations": 300,
-// },
-// {
-//   "learningRate": 1e-3,
-//   "nBatchSize": 64,
-//   "nHeads": 6,
-//   "name": "seed 3",
-//   "seed": 3,
-//   "useAlphaParams": true,
-//   "useResiduals": false,
-//   "startFreezingAtIndex": 6,
-//   "unfreezeEveryNSteps": 1000,
-//   "nIterations": 300,
-// }]
-
 const cfgs: Partial<ExperimentConfig>[] = [{
-  "name": "w alpha",
-  // 0 becomes negative
-  "seed": 42,
-  "useAlphaParams": true,
-  "useResiduals": false,
-  "nIterations": 5,
+  "name": "one head",
+  "learningRate": 0.001,
+  // "useAlphaParams": false,
+  // "useResiduals": true,
+  "nIterations": 200,
+  "nHeads": 1,
 },
 {
-  "name": "w residuals",
-  "seed": 42,
-  "useAlphaParams": false,
-  "useResiduals": true,
-  "nIterations": 5,
+  "name": "two heads",
+  "learningRate": 0.001,
+  // "useAlphaParams": false,
+  // "useResiduals": true,
+  "nIterations": 200,
+  "nHeads": 2,
 },
 {
-  "name": "no residuals",
-  "seed": 42,
-  "useAlphaParams": false,
-  "useResiduals": false,
-  "nIterations": 5,
-}]
+  "name": "three heads",
+  "learningRate": 0.001,
+  // "useAlphaParams": false,
+  // "useResiduals": true,
+  "nIterations": 200,
+  "nHeads": 3,
+},
+]
 
-// TODO(@aliciafmachado): we should dump the metrics and configs somewhere with the identifier.
 // TODO(@aliciafmachado): we can perhaps add an additional identifier twith a timestamp so that the name is unique.
-// TODO(@aliciafmachado): we need to plot accuracy every K steps. And to compute what's the best accuracy and loss.
 // TODO(@aliciafmachado): we want to run a few experiments and compile it in a doc.
-
-launchExperimentsAndPlot("test", cfgs);
+launchExperimentsAndPlot("test_one_head", cfgs);

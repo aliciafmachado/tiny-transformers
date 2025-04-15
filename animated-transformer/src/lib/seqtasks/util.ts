@@ -30,6 +30,7 @@ export interface Example {
   output: string[];
   // optional ([] if not defined) secret value that defines the output for the
   // input.
+  outputDistribution?: Map<string, number>[];
   secret?: string[];
 }
 

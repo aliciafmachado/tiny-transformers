@@ -191,7 +191,7 @@ export class TinyWorldTask implements BasicRandLmTask {
   // TODO: validate the relations don't break the types...
   // e.g. "is: ['']" can currently be added by accident.
   constructor(public config: TinyWorldTaskConfig,
-    // getProbabilities: boolean = false
+    getProbabilities: boolean = false
   ) {
     this.exampleId = 0;
     const typeDef = initTypeDef(this.config.typeHierarchy);
@@ -224,8 +224,7 @@ export class TinyWorldTask implements BasicRandLmTask {
     this.exampleIter = new StateIter(
       structuredClone(config.genStateConfig),
       // (x) => x.copy(),
-      // getProbabilities
-      (r) => this.examplesGen(r)
+      (r) => this.examplesGen(r, getProbabilities)
     );
   }
 
@@ -265,22 +264,34 @@ export class TinyWorldTask implements BasicRandLmTask {
     }
   }
 
-  // getDistributions: boolean = false
-  genRandExample(rndState: RandomState): Example {
+  genRandExample(rndState: RandomState, getDistributions: boolean = false): Example {
     const rns = new RandomStream(rndState);
     const generatedTokens: string[] = [];
     const maxTokens = this.config.maxInputLen + this.config.maxOutputLen;
     let curStory = this.initStory;
-    // let maybeNextStory: {
-    //   story: Story<string, VarName, string>;
-    //   rel: Relation<string, VarName, string>;
-    //   distr: Map<string, number>;
-    // } | null = null;
+    let maybeNextStory: {
+      story: Story<string, VarName, string>;
+      rel: Relation<string, VarName, string>;
+      distr: Map<string, RelRuleApps<TypeName, VarName, RelName>>;
+    } | null = null;
+    let extraTokens: string[] = [];
+    let outputDistribution: Array<Map<string, number>> = [];
     while (generatedTokens.length < maxTokens) {
-      // console.log('genRandExample: rns.state.curSeedVal', rns.state.curSeedVal);
-      let maybeNextStory = sampleNextRel(rns, curStory, this.rules);
+      maybeNextStory = sampleNextRel(rns, curStory, this.rules);
       if (maybeNextStory) {
-        const extraTokens = this.nextRelTokens(curStory, maybeNextStory.story, maybeNextStory.rel);
+        extraTokens = this.nextRelTokens(curStory, maybeNextStory.story, maybeNextStory.rel);
+        if (getDistributions) {
+          if (generatedTokens.length > 0) {
+            outputDistribution.push(new Map<string, number>([[relSepToken, 1]]))
+          }
+          let distr: Map<string, RelRuleApps<TypeName, VarName, RelName>> = new Map();
+          if (maybeNextStory?.distr !== undefined) {
+            distr = maybeNextStory?.distr;
+          }
+          outputDistribution = outputDistribution.concat(...this.getNextTokenProbabilities(
+            extraTokens, distr as Map<string, RelRuleApps<TypeName, VarName, RelName>>,
+            curStory));
+        }
         this.addNextRelTokens(maxTokens, generatedTokens, extraTokens);
         curStory = maybeNextStory.story;
       } else {
@@ -288,19 +299,21 @@ export class TinyWorldTask implements BasicRandLmTask {
       }
     }
 
-    // if (getDistributions)
-    //   return {
-    //     id: this.exampleId++,
-    //     input: generatedTokens.slice(0, this.config.maxInputLen),
-    //     output: generatedTokens.slice(this.config.maxInputLen),
-    //     outputDistribution: maybeNextStory?.distr,
-    //     // secret: [],
-    //   }
+    if (getDistributions) {
+      // Each list has the probabilities for that token in the generatedTokens
+      // For that we need to compute getDistributions for each story development and then make copies for all
+      // tokens.
+      return {
+        id: this.exampleId++,
+        input: generatedTokens.slice(0, this.config.maxInputLen),
+        output: generatedTokens.slice(this.config.maxInputLen),
+        outputDistribution: outputDistribution.slice(0, generatedTokens.length),
+      }
+    }
     return {
       id: this.exampleId++,
       input: generatedTokens.slice(0, this.config.maxInputLen),
       output: generatedTokens.slice(this.config.maxInputLen),
-      // secret: [],
     };
   }
 
@@ -317,41 +330,73 @@ export class TinyWorldTask implements BasicRandLmTask {
     return extraTokens.at(-1) as string;
   }
 
-  getNextTokenProbabilities(input: string[]): Map<string, number> {
-    // Initialize story from input and get next token distribution.
-    // Rebuild the story from the input.
-    const typeDef = initTypeDef(this.config.typeHierarchy);
-    const relationMap = initRelationMap(this.config.relationKinds);
-    let curStory = initStory(typeDef, relationMap);
-    curStory.extendScene(input.join("").split(", ").map((value) => parseRel(value)));
-    const ruleApps = applyRules(this.rules, curStory);
+  getNextTokens(
+    relRuleApps: RelRuleApps<string, `_${string}` | `?${string}`, string>,
+    curStory: Story<string, VarName, string>):
+    string[] | null {
+    if (!relRuleApps) {
+      return null;
+    }
+    const ruleApp = relRuleApps.ruleApps[0];
+    const extraTokens = this.nextRelTokens(curStory, ruleApp.story, ruleApp.newRel);
+    return extraTokens;
+  }
 
-    // Obtain the distribution.
-    const distr = nextRelDistrStats(ruleApps);
 
+  // we need to pass the story developements here, so that we can resolve what are the probabilities
+  // for all tokens in the story development.
+  getNextTokenProbabilities(extraTokens: string[], distr: Map<string, RelRuleApps<TypeName, VarName, RelName>>,
+    curStory: Story<string, VarName, string>): Array<Map<string, number>> {
     // Iterate over distribution to get possible occurences. 
-    const lastTokenToProbability =
+    const nextTokenToProbability =
       Array.from(distr.entries()).map(
         ([key, value]) => {
           return {
-            lastToken: this.lastTokenOfStory(value, curStory), probability: value.prob
+            nextTokens: this.getNextTokens(value, curStory), probability: value.prob
           }
         }).filter(
-          predicate => predicate.lastToken !== null) as { "lastToken": string, "probability": number }[];
+          predicate => predicate.nextTokens !== null) as { "nextTokens": string[], "probability": number }[];
 
-    // Reduce the output to sum probabilities for the same last tokens before creating a map.
-    return lastTokenToProbability.reduce((acc, value) => {
-      const currentProbSum = acc.get(value.lastToken) || 0;
-      acc.set(value.lastToken, currentProbSum + value.probability);
-      return acc;
-    }, new Map<string, number>())
+    const arrayOfTokensAndProbabilities: Array<Map<string, number>> = extraTokens.map((value, index) => {
+      // Check outputted tokens until index - 1 in extraTokens and see which options in the possible outcomes
+      // contain those.
+      // e.g. extraTokens = "a", "b", "c"
+      // index = 1
+      // "a" needs to be in nextTokens
+      const unormalizedMap = nextTokenToProbability.filter(predicate => {
+        const slicedTokens = predicate.nextTokens.slice(0, index);
+        for (const { s, i } of slicedTokens.map((s, i) => ({ s, i }))) {
+          if (s != extraTokens[i])
+            return false;
+          return true;
+        }
+        return true;
+        // map to actual value at index.
+      }).map((v) => {
+        return {
+          nextToken: v.nextTokens[index], probability: v.probability
+        }
+        // reduce similar values.
+      }).filter(predicate => predicate.nextToken).reduce((acc, value) => {
+        const currentProbSum = acc.get(value.nextToken) || 0;
+        acc.set(value.nextToken, currentProbSum + value.probability);
+        return acc;
+      }, new Map<string, number>());
+
+      // re-normalize results.
+      let sumOfUnormalized = 0;
+      unormalizedMap.forEach(v => sumOfUnormalized += v);
+      return new Map(
+        Array.from(unormalizedMap.entries()).map(([key, value]) => [key, value / sumOfUnormalized])
+      );
+    });
+
+    return arrayOfTokensAndProbabilities;
   }
 
-  // getProbabilities: boolean
-  *examplesGen(rndState: RandomState): Iterator<Example> {
+  *examplesGen(rndState: RandomState, getProbabilities: boolean): Iterator<Example> {
     while (true) {
-      // getProbabilities
-      yield this.genRandExample(rndState);
+      yield this.genRandExample(rndState, getProbabilities);
     }
   }
 }

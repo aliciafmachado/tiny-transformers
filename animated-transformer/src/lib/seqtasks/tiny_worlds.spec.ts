@@ -92,10 +92,13 @@ describe('tiny_worlds', () => {
     const initConfig: TinyWorldTaskConfig = structuredClone(defaultTinyWorldTaskConfig);
     initConfig.maxOutputLen = 20;
     initConfig.genStateConfig.seed = 42;
-    const tinyWorld = new TinyWorldTask(initConfig);
+    const tinyWorld = new TinyWorldTask(initConfig, true);
 
     const [example] = tinyWorld.exampleIter.takeOutN(1);
-    expect((tinyWorld.getNextTokenProbabilities(example.input).values().toArray().reduce((sum, cur) => sum += cur, 0))).toBeCloseTo(1, 1e-5);
+    expect(example.input.length + example.output.length).toBe(example.outputDistribution?.length || 0);
+    example.outputDistribution?.forEach((v) =>
+      expect((v.values().toArray().reduce((sum, cur) => sum += cur, 0))).toBeCloseTo(1, 1e-5)
+    )
   });
 
   // Special case that causes "runsAway _a" to be generated more than once.
