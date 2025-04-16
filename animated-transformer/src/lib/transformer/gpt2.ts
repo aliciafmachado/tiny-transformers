@@ -48,6 +48,7 @@ export type Config = {
     stddev: number;
     mean: number;
     seed: number;
+    initAlphaValue?: number;
   };
 };
 
@@ -197,7 +198,8 @@ export function initAlphaParams(init_value: number = 0): AlphaParams {
 
 export function initAttnHeadParams(
   spec: AttnHeadParamSpec,
-  initConfig?: tf_init.TruncatedNormalArgs
+  initConfig?: tf_init.TruncatedNormalArgs,
+  initAlphaValue?: number,
 ): AttnHeadParams {
   const { inputRep, kq, value, heads } = spec;
   const hiddenRep = 4 * inputRep;
@@ -228,7 +230,7 @@ export function initAttnHeadParams(
     attnHeadParams.layerNormHeadsProjection = initLayerNormParamsWithDims(spec.addLayerNormBias, { 'inputRepToFF': inputRep });
   }
   if (spec.addAlphaParameter) {
-    attnHeadParams.alphaParams = initAlphaParams();
+    attnHeadParams.alphaParams = initAlphaParams(initAlphaValue);
   }
   return attnHeadParams;
 }
@@ -371,7 +373,7 @@ export function initDecoderParams(config: Config): TransformerParams {
       addLayerNormBias: layerSpec.addLayerNormBias,
       addAlphaParameter: spec.addAlphaParameter,
     };
-    return initAttnHeadParams(attnHeadSpec, init);
+    return initAttnHeadParams(attnHeadSpec, init, init?.initAlphaValue);
   });
   const tokenEmbedding = makeTruncNormal(
     {

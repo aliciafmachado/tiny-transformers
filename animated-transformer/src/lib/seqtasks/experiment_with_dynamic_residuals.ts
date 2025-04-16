@@ -70,13 +70,7 @@ interface Metric {
   alphaSecondParams?: number[];
 }
 
-interface EvalMetric {
-  step: number;
-  accuracy: number;
-}
-
 const availableMetrics: string[] = ["loss", "accuracy", "klDivergence", "alphaFirstParams", "alphaSecondParams"];
-const availableEvalMetrics: string[] = ["accuracy"];
 
 // TODO: this should be a class with default values. 
 interface ExperimentConfig {
@@ -90,22 +84,25 @@ interface ExperimentConfig {
   nHeads: number;
   startFreezingAtIndex: number,
   seed: number,
+  initAlphaValue: number,
 }
 
 const MAXNUMBER = 1000;
 
-function defaultConfigs(config: Partial<ExperimentConfig> = {}): ExperimentConfig {
+function defaultConfigs(config: Partial<ExperimentConfig> = {},
+  defaultExpConfigs: ExperimentConfig): ExperimentConfig {
   return {
-    name: config.name ?? "defaultExperiment",
-    useResiduals: config.useResiduals ?? true,
-    useAlphaParams: config.useAlphaParams ?? false,
-    learningRate: config.learningRate ?? 0.001,
-    nIterations: config.nIterations ?? 100,
-    nBatchSize: config.nBatchSize ?? 64,
-    unfreezeEveryNSteps: config.unfreezeEveryNSteps ?? MAXNUMBER,
-    nHeads: config.nHeads ?? 3,
+    name: config.name ?? defaultExpConfigs.name,
+    useResiduals: config.useResiduals ?? defaultExpConfigs.useResiduals,
+    useAlphaParams: config.useAlphaParams ?? defaultExpConfigs.useAlphaParams,
+    learningRate: config.learningRate ?? defaultExpConfigs.learningRate,
+    nIterations: config.nIterations ?? defaultExpConfigs.nIterations,
+    nBatchSize: config.nBatchSize ?? defaultExpConfigs.nBatchSize,
+    unfreezeEveryNSteps: config.unfreezeEveryNSteps ?? defaultExpConfigs.unfreezeEveryNSteps,
+    nHeads: config.nHeads ?? defaultExpConfigs.nHeads,
     startFreezingAtIndex: config.startFreezingAtIndex ?? MAXNUMBER,
-    seed: config.seed ?? 42,
+    seed: config.seed ?? defaultExpConfigs.seed,
+    initAlphaValue: config.initAlphaValue ?? defaultExpConfigs.initAlphaValue,
   };
 }
 
@@ -119,7 +116,7 @@ function getTaskConfig(): TinyWorldTaskConfig {
 }
 
 function initTransformerConfig(baseVocab: string[], nHeads: number = 6, alphaParams: boolean = false,
-  residuals: boolean = true, seed: number,
+  residuals: boolean = true, seed: number, initAlphaValue: number,
 ): Config {
   // Set dummy transformer for testing.
   const embeddingSize = 16; // 64 * 12 originally
@@ -154,6 +151,7 @@ function initTransformerConfig(baseVocab: string[], nHeads: number = 6, alphaPar
       stddev: 0.05, // default
       mean: 0,
       seed: seed,
+      initAlphaValue: initAlphaValue,
     },
   };
   return config;
@@ -368,7 +366,7 @@ function run(experimentConfig: ExperimentConfig) {
 
   // define vocab & decoder
   const Config = initTransformerConfig(trainTask.baseVocab, experimentConfig.nHeads, experimentConfig.useAlphaParams, experimentConfig.useResiduals,
-    experimentConfig.seed
+    experimentConfig.seed, experimentConfig.initAlphaValue
   );
   const decoderParams = varifyParams(initDecoderParams(Config));
   const model: TransformerModel = {
@@ -547,7 +545,7 @@ function printMetric(setOfExpsName: string, experimentMetrics: [string, Metric[]
   async function callSharp(): Promise<void> {
     try {
       const buffer: Buffer = await sharp(Buffer.from(outerHTMLWithBackground, "utf-8")).png().toBuffer();
-      const nameToSave = setOfExpsName + "/" + metricName + name_suffix + ".png";
+      const nameToSave = setOfExpsName + "/debug_plots/" + metricName + name_suffix + ".png";
       fs.writeFileSync(nameToSave, buffer);
       console.log("PNG image saved as " + nameToSave);
     } catch (error) {
@@ -568,9 +566,20 @@ function saveExpToJson(data: ExperimentConfig[] | [string, Metric[]][], filePath
   }
 }
 
-function launchExperimentsAndPlot(setOfExpsName: string, partialConfigs: Partial<ExperimentConfig>[]) {
+function launchExperimentsAndPlot(setOfExpsName: string, partialConfigs: Partial<ExperimentConfig>[],
+  defaultExpConfigs: ExperimentConfig,
+) {
+  const args = process.argv.slice(1);
+  let printDebugPlots = false;
+
+  console.log(args);
+  if (args.length == 2 && args[1] == "debug") {
+    console.log("INFO: Will print debug plots.")
+    printDebugPlots = true;
+  }
+
   // First set other arguments:
-  const configs = partialConfigs.map((value) => defaultConfigs(value));
+  const configs = partialConfigs.map((value) => defaultConfigs(value, defaultExpConfigs));
   console.log("Launching experiment " + setOfExpsName);
   console.log("Number of experiments is " + configs.length);
   console.log("Configs are:");
@@ -581,12 +590,15 @@ function launchExperimentsAndPlot(setOfExpsName: string, partialConfigs: Partial
   configs.map((config) => experimentMetrics.push([config.name, run(config)]));
 
   // Plot metrics.
-  for (const metric of availableMetrics) {
-    if (metric == "loss" || metric == "accuracy" || metric == "klDivergence")
-      printMetric(setOfExpsName, experimentMetrics, metric as keyof Metric);
-    else {
-      for (let i = 0; i < configs[0].nHeads; i++) {
-        printMetric(setOfExpsName, experimentMetrics, metric as keyof Metric, i);
+  if (printDebugPlots) {
+    fs.mkdirSync(setOfExpsName + "/debug_plots", { recursive: true });
+    for (const metric of availableMetrics) {
+      if (metric == "loss" || metric == "accuracy" || metric == "klDivergence")
+        printMetric(setOfExpsName, experimentMetrics, metric as keyof Metric);
+      else {
+        for (let i = 0; i < configs[0].nHeads; i++) {
+          printMetric(setOfExpsName, experimentMetrics, metric as keyof Metric, i);
+        }
       }
     }
   }
@@ -596,32 +608,49 @@ function launchExperimentsAndPlot(setOfExpsName: string, partialConfigs: Partial
   saveExpToJson(experimentMetrics, setOfExpsName + "/metrics.json");
 }
 
+const defaultCfgs: ExperimentConfig = {
+  name: "defaultExperiment",
+  useResiduals: true,
+  useAlphaParams: false,
+  learningRate: 0.001,
+  nIterations: 500,
+  nBatchSize: 64,
+  unfreezeEveryNSteps: MAXNUMBER,
+  nHeads: 3,
+  startFreezingAtIndex: MAXNUMBER,
+  seed: 42,
+  initAlphaValue: 0,
+}
+
 const cfgs: Partial<ExperimentConfig>[] = [{
-  "name": "one head",
-  "learningRate": 0.001,
-  // "useAlphaParams": false,
-  // "useResiduals": true,
-  "nIterations": 200,
-  "nHeads": 1,
+  "name": "0.01",
+  "learningRate": 0.01,
 },
 {
-  "name": "two heads",
-  "learningRate": 0.001,
-  // "useAlphaParams": false,
-  // "useResiduals": true,
-  "nIterations": 200,
-  "nHeads": 2,
+  "name": "0.005",
+  "learningRate": 0.005,
 },
 {
-  "name": "three heads",
+  "name": "0.001",
   "learningRate": 0.001,
-  // "useAlphaParams": false,
-  // "useResiduals": true,
-  "nIterations": 200,
-  "nHeads": 3,
+},
+{
+  "name": "0.0005",
+  "learningRate": 0.0005,
+},
+{
+  "name": "0.0001",
+  "learningRate": 0.0001,
+},
+{
+  "name": "0.00005",
+  "learningRate": 0.00005,
+},
+{
+  "name": "0.00001",
+  "learningRate": 0.00001,
 },
 ]
 
-// TODO(@aliciafmachado): we can perhaps add an additional identifier twith a timestamp so that the name is unique.
 // TODO(@aliciafmachado): we want to run a few experiments and compile it in a doc.
-launchExperimentsAndPlot("test_one_head", cfgs);
+launchExperimentsAndPlot("learning_rate_search_for_residuals", cfgs, defaultCfgs);
