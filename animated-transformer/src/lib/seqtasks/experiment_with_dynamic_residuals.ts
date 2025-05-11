@@ -55,11 +55,12 @@ import {
 import { varifyParams, listifyVarParams } from '../gtensor/params';
 import { RandomStream, makeRandomStream } from '../random/random';
 import { isNumber } from 'underscore';
+import { Experiment } from '../weblab/experiment';
 
 const tfjsBackendName = tf.getBackend();
 console.log('tfjs backend:', tfjsBackendName);
 
-const printEveryNBatches = 50;
+const printEveryNBatches = 10;
 
 interface Metric {
   loss: number;
@@ -567,7 +568,7 @@ function saveExpToJson(data: ExperimentConfig[] | [string, Metric[]][], filePath
 }
 
 function launchExperimentsAndPlot(setOfExpsName: string, partialConfigs: Partial<ExperimentConfig>[],
-  defaultExpConfigs: ExperimentConfig,
+  defaultExpConfigs: ExperimentConfig, rerunExperiment: boolean = false
 ) {
   const args = process.argv.slice(1);
   let printDebugPlots = false;
@@ -579,7 +580,15 @@ function launchExperimentsAndPlot(setOfExpsName: string, partialConfigs: Partial
   }
 
   // First set other arguments:
-  const configs = partialConfigs.map((value) => defaultConfigs(value, defaultExpConfigs));
+  let configs: ExperimentConfig[];
+  if (rerunExperiment) {
+    console.log("Rerunning experiment " + setOfExpsName);
+    const fileContent = fs.readFileSync(setOfExpsName + '/configs.json', 'utf8');
+    configs = JSON.parse(fileContent);
+  }
+  else {
+    configs = partialConfigs.map((value) => defaultConfigs(value, defaultExpConfigs));
+  }
   console.log("Launching experiment " + setOfExpsName);
   console.log("Number of experiments is " + configs.length);
   console.log("Configs are:");
@@ -610,47 +619,30 @@ function launchExperimentsAndPlot(setOfExpsName: string, partialConfigs: Partial
 
 const defaultCfgs: ExperimentConfig = {
   name: "defaultExperiment",
-  useResiduals: true,
-  useAlphaParams: false,
-  learningRate: 0.001,
-  nIterations: 500,
+  useResiduals: false,
+  useAlphaParams: true,
+  learningRate: 0.005,
+  nIterations: 100,
   nBatchSize: 64,
   unfreezeEveryNSteps: MAXNUMBER,
   nHeads: 3,
   startFreezingAtIndex: MAXNUMBER,
   seed: 42,
-  initAlphaValue: 0,
+  initAlphaValue: 0.5,
 }
 
-const cfgs: Partial<ExperimentConfig>[] = [{
-  "name": "0.01",
-  "learningRate": 0.01,
-},
-{
-  "name": "0.005",
-  "learningRate": 0.005,
-},
-{
-  "name": "0.001",
-  "learningRate": 0.001,
-},
-{
-  "name": "0.0005",
-  "learningRate": 0.0005,
-},
-{
-  "name": "0.0001",
-  "learningRate": 0.0001,
-},
-{
-  "name": "0.00005",
-  "learningRate": 0.00005,
-},
-{
-  "name": "0.00001",
-  "learningRate": 0.00001,
-},
+const cfgs: Partial<ExperimentConfig>[] = [
+  {
+    name: "alpha params",
+    useResiduals: false,
+    useAlphaParams: true,
+  },
+  {
+    name: "residuals",
+    useResiduals: false,
+    useAlphaParams: false,
+  },
 ]
 
 // TODO(@aliciafmachado): we want to run a few experiments and compile it in a doc.
-launchExperimentsAndPlot("learning_rate_search_for_residuals", cfgs, defaultCfgs);
+launchExperimentsAndPlot("learning_rate_search_for_residuals", cfgs, defaultCfgs, true);

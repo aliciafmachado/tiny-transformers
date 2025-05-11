@@ -37,6 +37,7 @@ import { dropout } from './dropout';
 import { BasicTaskTokenRep, StrSeqPrepFn, tokenizeAndMapToIdx, embedBatch } from '../tokens/token_gemb';
 import { RandomStream } from '../random/random';
 import { causalMask, BatchAttnHeadComputation, TransformerComputation, transformerTopPrediction, computeMaxInputLength, allPastTokensCrossEntropyLossWithIntegerLabels } from './common_transformer';
+import { gtensor } from '..';
 
 export type Config = {
   id: string;
@@ -247,6 +248,14 @@ function gelu(x: tf.Tensor) {
   return tf.mul(x, cdf);
 }
 
+function computeNormalization(x: GTensor<never>, addSquaredRootTwo: boolean = false): GTensor<never> {
+  let sqdRootTwo = gtensor.makeScalar(1);
+  if (addSquaredRootTwo)
+    sqdRootTwo = gtensor.makeScalar(2).sqrt();
+  return sqdRootTwo.pointwiseDiv(
+    (x.squared().pointwiseAdd((makeScalar(1).pointwiseSub(x)).squared())).sqrt());
+}
+
 // (Approximation for) Compute (batched) attention.
 //
 // Note: for non-batched attention, the code is identical, just remove the
@@ -272,7 +281,8 @@ export function computeAttnHead(
 
   let rawAttention = keys
     .rename('pos', 'keyPos')
-    .contract(queries.rename('pos', 'queryPos'), ['kq']);
+    .contract(queries.rename('pos', 'queryPos'), ['kq']).scalarDiv(
+      makeScalar(keys.dim['kq'].size, 'float32').sqrt());
 
   const attention = causalMask(rawAttention);
 
@@ -293,18 +303,19 @@ export function computeAttnHead(
   if (spec.residuals) {
     headsReductionAfterResidual = headsReductionAfterDropout.pointwiseAdd(seqInput.rename('inputRep', 'inputRepToFF'));
   }
+
   if (params.alphaParams) {
     const alphaFirstClipped = params.alphaParams.alphaFirst; // .clipByValue(-1, 1);
-    const normalize = true;
+    const addSquaredRootTwo = true;
 
     headsReductionAfterResidual = headsReductionAfterDropout.pointwiseMul(
-      alphaFirstClipped).pointwiseAdd(seqInput.rename(
-        'inputRep', 'inputRepToFF').pointwiseMul(makeScalar(1).pointwiseSub(alphaFirstClipped)));
+      alphaFirstClipped)
 
-    if (normalize) {
-      headsReductionAfterResidual.pointwiseDiv(
-        (alphaFirstClipped.squared().pointwiseAdd(makeScalar(1).pointwiseSub(alphaFirstClipped)).squared()).sqrt());
-    }
+    headsReductionAfterResidual = headsReductionAfterResidual.pointwiseAdd(seqInput.rename(
+      'inputRep', 'inputRepToFF').pointwiseMul(makeScalar(1).pointwiseSub(alphaFirstClipped)));
+
+    // Normalize.
+    headsReductionAfterResidual = headsReductionAfterResidual.pointwiseMul(computeNormalization(alphaFirstClipped, addSquaredRootTwo));
   }
 
   let inputToFF = headsReductionAfterResidual;
@@ -338,11 +349,17 @@ export function computeAttnHead(
       headsReductionAfterResidual.rename('inputRepToFF', 'inputRep'));
   }
   if (params.alphaParams) {
+    const addSquaredRootTwo = true;
     const alphaSecondClipped = params.alphaParams.alphaSecond  //.clipByValue(-1, 1);
     seqOutput = seqOutput.pointwiseMul(
-      alphaSecondClipped).pointwiseAdd(headsReductionAfterResidual.rename(
-        'inputRepToFF', 'inputRep').pointwiseMul(makeScalar(1).pointwiseSub(alphaSecondClipped))).pointwiseDiv(
-          alphaSecondClipped.squared().pointwiseAdd(makeScalar(1).pointwiseSub(alphaSecondClipped)).squared());
+      alphaSecondClipped)
+
+    seqOutput = seqOutput.pointwiseAdd((headsReductionAfterResidual.rename(
+      'inputRepToFF', 'inputRep').pointwiseMul(makeScalar(1).pointwiseSub(alphaSecondClipped))))
+
+    // Normalize.
+    seqOutput = seqOutput.pointwiseMul(
+      computeNormalization(alphaSecondClipped, addSquaredRootTwo));
   }
 
   return {
