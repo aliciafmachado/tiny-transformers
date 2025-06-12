@@ -112,6 +112,8 @@ function getTaskConfig(): TinyWorldTaskConfig {
     ...defaultTinyWorldTaskConfig,
     maxInputLen: 10,
     maxOutputLen: 1,
+    // maxInputLen: 50,
+    // maxOutputLen: 10,
   };
   return taskConfig;
 }
@@ -644,5 +646,4 @@ const cfgs: Partial<ExperimentConfig>[] = [
   },
 ]
 
-// TODO(@aliciafmachado): we want to run a few experiments and compile it in a doc.
-launchExperimentsAndPlot("learning_rate_search_for_residuals", cfgs, defaultCfgs, true);
+launchExperimentsAndPlot("test", cfgs, defaultCfgs, false);

@@ -91,6 +91,95 @@ export const bayesianV1TinyWorldTaskConfig: TinyWorldTaskConfig = {
   maxEntityLimit: 6,
 };
 
+export const harderTinyWorldTaskConfig: TinyWorldTaskConfig = {
+  id: 'harder tiny synthetic world',
+  kind: 'TinyWorldTask',
+  genStateConfig: { seed: 42 },
+  maxInputLen: 20,
+  maxOutputLen: 10,
+  typeHierarchy: {
+    // Add numeric comparisons, more interactions, more actors.
+    animal: ['cat', 'monkey', 'elephant', 'dog'],
+    inanimate: ['rock', 'tree', 'flower'],
+    squishable: ['cat', 'monkey', 'flower'],
+    unsquishable: ['flower'],
+    predator: ['cat', 'dog'], // ALI: predators could be more likely to chase other animals.
+
+  },
+  // We probably want to define a numerical property "speed"
+  // and then we can define numerical values for each entity.
+  // It should be possible to have entities without any property.
+  // Other idea is that the animal needs to be heavier to squish
+  // another animal.
+  relationKinds: { // QUESTION: where do you define if the relation needs two entities or just one?
+    is: [universalType],
+    runsAway: ['animal'],
+    squishes: ['animal', 'squishable'], // QUESTION: does it mean that an object can be squished if it's either an animal or squishable
+    jumps: ['animal'],
+    chase: ['animal', 'animal'],  // ALI: add chasing, what if an animal that is chasing is more likely to jump?
+    unsquishes: ['unsquishable'], // ALI: add "unsquishes", the flower could get back to its original shape
+    // ALI: how 
+  },
+  baseStory: [],
+  rules: [
+    // TODO: We might want type-variables, save us from enumerating rules
+    // for all of these...
+    //
+    // We might mention any new kind kind of thing (at any level of abstraction!)
+    'S(is ?x:cat) += 1',
+    'S(is ?x:monkey) += 2', // But stories of monkeys are the best and most common
+    'S(is ?x:elephant) += 1',
+    'S(is ?x:rock) += 1',
+    'S(is ?x:tree) += 1',
+    'S(is ?x:flower) += 1',
+    'S(is ?x:animal) += 1',
+    'S(is ?x:inanimate) += 1',
+    'S(is ?x:squishable) += 1',
+    'S(is ?x:unsquishable) += 0.1', // ALI: unlikely that we get a random unsquishable object
+    'S(is ?x | is ?y) *= 0.5',
+
+    // A mentioned animal might jump
+    'S(jumps ?x | is ?x:animal) += 5',
+    'S(jumps ?x | jumps ?x) += 0.2',
+
+    // When they jump, monkeys and cats sometimes squish things, but monkeys more often
+    //
+    // TODO: we've like to express that you can squish one thing per jump.
+    'S(squishes ?x ?y | jumps ?x:monkey, is ?y) += 2',
+    'S(squishes ?x ?y | jumps ?x:cat, is ?y) += 1',
+    'S(squishes ?x ?x | is ?x) *= 0',
+
+    // Cats sometimes run away away when elephants jump
+    'S(runsAway ?c | jumps ?e:elephant, is ?c:cat) += 2',
+    // Any existing animal might run away at any time
+    'S(runsAway ?x | is ?x:animal) += 1',
+    // A new never mentioned animal might run away
+    'S(runsAway ?x:animal) += 1',
+
+    // We might note that an animal that ran away is a cat (if we didn't say it before)
+    //
+    // TODO: I'd like to be able to quantify over the type... e.g. but that means
+    // implicitly defining a distinution over types, which I guess would be some kind of equal split?
+    // And also, how do you manage many level of specificity? t?<..<animal and t?<=..<=animal
+    //   'S(is ?x:?t<animal | runsAway ?x, -is ?x:?t) += 1',
+    'S(is ?x:cat | runsAway ?x, -is ?x) += 1',
+
+    // When an animal runs away, it can't squish anything, jump or run-away again.
+    // NOTE: We could also use negative conditions on the positive action...
+    //
+    // TODO: below is a nice example of why we should use linear
+    // types for conditions, not depend on past statements
+    // (like we do below)... linear types could saves us from the frame problem!
+    'S(jumps ?a | runsAway ?a:animal) *= 0',
+    'S(squishes ?x ?a | runsAway ?a) *= 0',
+    'S(runsAway ?x | runsAway ?x) *= 0',
+    // Squished animals can't run away or jump anymore
+    'S(runsAway ?y | squishes ?x ?y) *= 0',
+    'S(jumps ?y | squishes ?x ?y) *= 0',
+  ],
+  maxEntityLimit: 6,
+}
+
 export const defaultTinyWorldTaskConfig: TinyWorldTaskConfig = {
   id: 'tiny synthetic world',
   kind: 'TinyWorldTask',
@@ -139,7 +228,8 @@ export const defaultTinyWorldTaskConfig: TinyWorldTaskConfig = {
     // Cats sometimes run away away when elephants jump
     'S(runsAway ?c | jumps ?e:elephant, is ?c:cat) += 2',
     // Any existing animal might run away at any time
-    'S(runsAway ?x:animal | is ?x) += 1',
+    // TODO(aliciafm): Correct setup: 'S(runsAway ?x | is ?x:animal) += 1',
+    'S(runsAway ?x | is ?x) += 1',
     // A new never mentioned animal might run away
     'S(runsAway ?x:animal) += 1',
 

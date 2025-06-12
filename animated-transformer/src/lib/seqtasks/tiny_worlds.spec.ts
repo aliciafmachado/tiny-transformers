@@ -19,6 +19,7 @@ import {
   TinyWorldTaskConfig,
   bayesianV1TinyWorldTaskConfig,
   defaultTinyWorldTaskConfig,
+  harderTinyWorldTaskConfig,
 } from './tiny_worlds';
 
 describe('tiny_worlds', () => {
@@ -179,4 +180,25 @@ describe('tiny_worlds', () => {
   //     'animal, is _c:animal, jumps _b, jumps _b, is _d:'
   //   );
   // });
+  it('genRandExampleForHarderTask', () => {
+    const initConfig: TinyWorldTaskConfig = structuredClone(harderTinyWorldTaskConfig);
+    initConfig.maxOutputLen = 30;
+    initConfig.genStateConfig.seed = 42;
+    const tinyWorld = new TinyWorldTask(initConfig);
+
+    const [example] = tinyWorld.exampleIter.takeOutN(1);
+    expect(example.id).toEqual(0);
+    expect(example.input.length).toEqual(initConfig.maxInputLen);
+    expect(example.input.join('')).toEqual('is _a:flower, is _b:');
+    expect(example.output.join('')).toEqual('tree, runsAway _b, is _c:flower|rock|tree, is _d:');
+    // expect(example.output.join('')).toEqual('cat, is _c:tree, is _d:elephant, jumps _a, jumps ');
+
+    const [example2] = tinyWorld.exampleIter.takeOutN(1);
+    expect(example2.id).toEqual(1);
+    expect(example2.input.join('')).toEqual('is _a:tree, is _b:');
+    // TODO: make types get printed as their most general form...
+    expect(example2.output.join('')).toEqual(
+      'elephant, jumps _b, runsAway _a, is _c:flower|rock|tree, '
+    );
+  });
 });
