@@ -75,8 +75,8 @@ export function parseRule<
     conclAndConditionStrs.length === 1
       ? []
       : conclAndConditionStrs[1]
-          .split(conditionsSplitRegexp)
-          .filter((s) => s.length > 0);
+        .split(conditionsSplitRegexp)
+        .filter((s) => s.length > 0);
 
   const posConditions = allConditionStrs
     .filter((s) => !isNegativeCondition(s))

@@ -131,6 +131,7 @@ export function initTypeDef(typeHierarchy: TypeHierarchySpec): TypeDef<string> {
     parents: new Set<string>([]),
     decendents: new Set<string>([]),
     ancestors: new Set<string>([]),
+    properties: [],
   };
   const types = {
     children: new Map<string, Set<string>>([[universalType, current.children]]),
@@ -147,12 +148,17 @@ export type RelArgumentMatch = {
   // A set of possible types for the variable, in the form:
   // type1|type1|...|typeN
   varTypesString: string;
+  propName?: string;
+  propValue?: string;
 };
 
+// TODO(@aliciafmachado): Should th numerical values be entities like varNames?
 export type RelArgument<TypeName, VarName> = {
   varName: VarName;
   // A set of possible types for the variable.
   varTypes: Set<TypeName>;
+  // A Mapping of properties to their values.
+  varProperties?: Map<string, any>; // @aliciafmachado: This is one idea of implementation
 };
 
 export type Relation<TypeName, VarName, RelName> = {
@@ -285,6 +291,11 @@ export function flattenTypeset<TypeName>(
 // }
 
 // Every subtype is in a superType.
+// TODO: typesetissubsetof, typeset 
+// special class of types with special prefix, when we ask equality changes
+// and then make the numerical computation
+// typeset with operation and reduciton, operation that makes it checkeable
+// type functions
 export function typeSetIsSubsetOf<TypeName>(
   decendentMap: Map<TypeName, Set<TypeName>>,
   subTypes: Set<TypeName>,
@@ -365,10 +376,15 @@ export function stringifyRelation<TypeName, VarName, RelName>(
 const relRegexp = new RegExp(/\s*(?<relName>\S*)\s+(?<argsString>((\_|\?)\S+\s*)*)/);
 type RelMatch = { relName: string; argsString: string };
 const argsSplitRegexp = new RegExp(/\s+/);
-const argumentRegexp = new RegExp(/(?<varName>[\_\?][^ \t\r\n\f\:]+)(\:(?<varTypesString>\S+))?/);
+const argumentRegexp = new RegExp(/(?<varName>[\_\?][^ \t\r\n\f\:]+)(\:(?<varTypesString>\S+))?(\s+)?(?<propName>[^ \t\r\n\f\:]+)?(\:(?<propValue>\S+))?/);
 
 export function parseTypeSet(typesetString: string): Set<string> {
   return new Set<string>(typesetString.split('|'));
+}
+
+export function parseProperty(propName: string, propValue: string): Map<string, number> {
+  const propValueNumber = parseInt(propValue, 10);
+  return new Map<string, number>([[propName, propValueNumber]]);
 }
 
 export function parseTypeSetArgs<TypeName extends string>(
@@ -387,10 +403,15 @@ export function initRelationMap<RelName extends string, TypeName extends string>
   return relations;
 }
 
+// TODO(@aliciafm): i'm not sure i understand what this means in the sense that
+// what if you want to associate a new thing to an existing variable?
 export function parseRel<TypeName extends string, VarName extends string, RelName extends string>(
   relString: string
 ): Relation<TypeName, VarName, RelName> {
   const match = relString.match(relRegexp)?.groups as RelMatch;
+  console.log(relString);
+  console.log(match);
+  console.log("foi");
   if (!match) {
     throw new Error(`'${relString}' does not match a relation.`);
   }
@@ -411,10 +432,20 @@ export function parseRel<TypeName extends string, VarName extends string, RelNam
       // cases, we treat it as `universalType`.
       const varTypes = parseTypeSet(argMatch.varTypesString || universalType) as Set<TypeName>;
       const varName = argMatch.varName as VarName;
+
+      // Extract property name and values:
+      const varProperties = (argMatch.propName && argMatch.propValue) ?
+        parseProperty(argMatch.propName, argMatch.propValue) : new Map<string, number>();
+
       const relArgument: RelArgument<TypeName, VarName> = {
         varName,
         varTypes,
       };
+
+      // set varProperties in relArgument if it's not empty
+      if (varProperties.size > 0) {
+        relArgument.varProperties = varProperties;
+      }
       return relArgument;
     })
     .filter((relArgument) => relArgument !== null) as RelArgument<TypeName, VarName>[];

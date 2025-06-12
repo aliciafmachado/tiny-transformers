@@ -26,7 +26,7 @@ import {
 } from './relations';
 
 describe('relations', () => {
-  beforeEach(() => {});
+  beforeEach(() => { });
 
   it('parseRel: simple', () => {
     const { relName, args } = parseRel('squishes _x _y:animal _z:animal|squishable');
